@@ -24,3 +24,4 @@ dist-ssr
 *.sw?
 *.exe
 release/FrqLiner_win-unpacked.zip
+/release
