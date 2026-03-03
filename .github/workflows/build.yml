@@ -21,24 +21,21 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        working-directory: frq-editor
         run: npm ci
 
       - name: Build Vite app
-        working-directory: frq-editor
         run: npm run build
         env:
           ELECTRON_BUILD: 'true'
 
       - name: Build Electron (Windows)
-        working-directory: frq-editor
         run: npx electron-builder --win --publish never
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: frqliner-windows
-          path: frq-editor/release/*.exe
+          path: release/*.exe
 
   # ── macOS build ──────────────────────────────────────────────────
   build-macos:
@@ -54,17 +51,14 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        working-directory: frq-editor
         run: npm ci
 
       - name: Build Vite app
-        working-directory: frq-editor
         run: npm run build
         env:
           ELECTRON_BUILD: 'true'
 
       - name: Build Electron (macOS)
-        working-directory: frq-editor
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --mac --publish never
@@ -73,7 +67,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: frqliner-macos
-          path: frq-editor/release/*.dmg
+          path: release/*.dmg
 
   # ── Create GitHub Release (on tag push) ─────────────────────────
   release:
