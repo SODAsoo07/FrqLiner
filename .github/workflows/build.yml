@@ -1,0 +1,111 @@
+name: Build Frqliner
+
+on:
+  push:
+    tags:
+      - 'v*'         # Trigger on version tags like v1.0.0
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  # ── Windows build ─────────────────────────────────────────────
+  build-windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frq-editor/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frq-editor
+        run: npm ci
+
+      - name: Build Vite app
+        working-directory: frq-editor
+        run: npm run build
+        env:
+          ELECTRON_BUILD: 'true'
+
+      - name: Build Electron (Windows)
+        working-directory: frq-editor
+        run: npx electron-builder --win --publish never
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frqliner-windows
+          path: frq-editor/release/*.exe
+
+  # ── macOS build ────────────────────────────────────────────────
+  build-macos:
+    name: macOS (x64 + arm64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frq-editor/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frq-editor
+        run: npm ci
+
+      - name: Build Vite app
+        working-directory: frq-editor
+        run: npm run build
+        env:
+          ELECTRON_BUILD: 'true'
+
+      - name: Build Electron (macOS)
+        working-directory: frq-editor
+        # Note: macOS code signing requires certificates.
+        # For unsigned builds (for personal use), use CSC_IDENTITY_AUTO_DISCOVERY=false
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npx electron-builder --mac --publish never
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frqliner-macos
+          path: frq-editor/release/*.dmg
+
+  # ── Create GitHub Release (on tag push) ───────────────────────
+  release:
+    name: Create Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frqliner-windows
+          path: release/
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frqliner-macos
+          path: release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/**
+          draft: false
+          prerelease: false
+          generate_release_notes: true

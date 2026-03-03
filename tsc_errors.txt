@@ -1,0 +1,40 @@
+src/components/Editor.tsx(7,23): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(8,26): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(13,31): error TS2304: Cannot find name 'useState'.
+src/components/Editor.tsx(14,35): error TS2304: Cannot find name 'useState'.
+src/components/Editor.tsx(17,23): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(18,26): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(21,22): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(22,29): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(23,29): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(24,39): error TS2304: Cannot find name 'useState'.
+src/components/Editor.tsx(25,43): error TS2304: Cannot find name 'useState'.
+src/components/Editor.tsx(26,26): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(29,30): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(30,33): error TS2304: Cannot find name 'useRef'.
+src/components/Editor.tsx(31,51): error TS2304: Cannot find name 'useState'.
+src/components/Editor.tsx(51,5): error TS2304: Cannot find name 'useEffect'.
+src/components/Editor.tsx(88,27): error TS6133: 'sampleRate' is declared but its value is never read.
+src/components/Editor.tsx(132,5): error TS2304: Cannot find name 'useEffect'.
+src/components/Editor.tsx(170,5): error TS2304: Cannot find name 'useEffect'.
+src/components/Editor.tsx(187,5): error TS2304: Cannot find name 'useEffect'.
+src/components/Editor.tsx(209,23): error TS6133: 'sampleRate' is declared but its value is never read.
+src/components/Editor.tsx(213,23): error TS6133: 'totalDur' is declared but its value is never read.
+src/components/Editor.tsx(390,5): error TS2304: Cannot find name 'useEffect'.
+src/components/Editor.tsx(400,26): error TS7006: Parameter 'z' implicitly has an 'any' type.
+src/components/Editor.tsx(405,26): error TS7006: Parameter 'z' implicitly has an 'any' type.
+src/components/Editor.tsx(435,35): error TS2315: Type 'MouseEvent' is not generic.
+src/components/Editor.tsx(461,35): error TS2315: Type 'MouseEvent' is not generic.
+src/components/Editor.tsx(497,24): error TS7006: Parameter 'o' implicitly has an 'any' type.
+src/components/Editor.tsx(501,22): error TS7006: Parameter 'z' implicitly has an 'any' type.
+src/components/Toolbar.tsx(25,23): error TS2339: Property 'frq' does not exist on type '{ frq?: File | undefined; wav?: File | undefined; } | { baseName: string; path: string; }'.
+  Property 'frq' does not exist on type '{ baseName: string; path: string; }'.
+src/components/Toolbar.tsx(26,33): error TS2345: Argument of type '{ frq?: File | undefined; wav?: File | undefined; } | { baseName: string; path: string; }' is not assignable to parameter of type '{ frq?: File | undefined; wav?: File | undefined; }'.
+  Type '{ baseName: string; path: string; }' has no properties in common with type '{ frq?: File | undefined; wav?: File | undefined; }'.
+src/components/Toolbar.tsx(31,23): error TS2339: Property 'wav' does not exist on type '{ frq?: File | undefined; wav?: File | undefined; } | { baseName: string; path: string; }'.
+  Property 'wav' does not exist on type '{ baseName: string; path: string; }'.
+src/components/Toolbar.tsx(32,33): error TS2345: Argument of type '{ frq?: File | undefined; wav?: File | undefined; } | { baseName: string; path: string; }' is not assignable to parameter of type '{ frq?: File | undefined; wav?: File | undefined; }'.
+  Type '{ baseName: string; path: string; }' has no properties in common with type '{ frq?: File | undefined; wav?: File | undefined; }'.
+src/components/Toolbar.tsx(37,21): error TS6133: 'baseName' is declared but its value is never read.
+src/components/Toolbar.tsx(42,64): error TS2339: Property 'baseName' does not exist on type '{ frq?: File | undefined; wav?: File | undefined; }'.
+src/components/Toolbar.tsx(48,37): error TS2339: Property 'path' does not exist on type '{ frq?: File | undefined; wav?: File | undefined; }'.
