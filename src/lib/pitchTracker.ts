@@ -86,11 +86,34 @@ export async function generateBasicF0(
             }
         }
 
-        // 3-point median smoothing to kill glitchy single-frame errors
+        // ── Post-processing ──────────────────────────────────────────────────
+        // 1. Kill suspicious isolated voiced frames (pitch jumps ≥ 1.5x in a 3-frame window)
         for (let i = 1; i < frames.length - 1; i++) {
-            if (frames[i - 1].f0 > 0 && frames[i].f0 > 0 && frames[i + 1].f0 > 0) {
-                const s = [frames[i - 1].f0, frames[i].f0, frames[i + 1].f0].sort((a, b) => a - b);
-                frames[i].f0 = s[1];
+            const prev = frames[i - 1].f0;
+            const curr = frames[i].f0;
+            const next = frames[i + 1].f0;
+            if (curr > 0 && (prev <= 0 || next <= 0)) continue; // boundary — keep
+            if (curr > 0 && prev > 0 && next > 0) {
+                if (curr > prev * 1.6 || curr < prev * 0.6) {
+                    if (curr > next * 1.6 || curr < next * 0.6) {
+                        frames[i].f0 = (prev + next) / 2; // replace with interpolated value
+                    }
+                }
+            }
+        }
+
+        // 2. Gaussian-weighted moving average  (5-point kernel, 3 passes)
+        const KERNEL = [0.07, 0.20, 0.46, 0.20, 0.07] as const;
+        for (let pass = 0; pass < 3; pass++) {
+            const tmp = frames.map(f => f.f0);
+            for (let i = 2; i < frames.length - 2; i++) {
+                if (tmp[i] <= 0) continue;
+                let sum = 0, w = 0;
+                for (let k = -2; k <= 2; k++) {
+                    const v = tmp[i + k];
+                    if (v > 0) { sum += v * KERNEL[k + 2]; w += KERNEL[k + 2]; }
+                }
+                if (w > 0) frames[i].f0 = sum / w;
             }
         }
 

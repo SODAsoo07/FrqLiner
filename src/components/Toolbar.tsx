@@ -164,7 +164,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         wavFile: group.wav || null,
                         name: group.frq.name,
                         path: group.path || group.frq.name,
-                        frqData,
+                        frqData, originalFrqData: frqData,
                         history: [], redoStack: [], isModified: false,
                         expectedF0, sourceType
                     });
@@ -204,7 +204,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         wavFile: group.wav || null,
                         name: frqName,
                         path: (group.path || group.pmk.name).replace(/\.pmk$/i, '_wav.frq'),
-                        frqData,
+                        frqData, originalFrqData: frqData,
                         history: [], redoStack: [], isModified: false,
                         expectedF0, sourceType: 'pmk' as const
                     });
@@ -228,7 +228,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                     wavFile: group.wav,
                     name: frqName,
                     path: group.path?.replace(/\.wav$/i, '_wav.frq') || frqName,
-                    frqData: emptyFrqData,
+                    frqData: emptyFrqData, originalFrqData: emptyFrqData,
                     history: [], redoStack: [], isModified: false,
                     expectedF0, sourceType: 'wav-only' as const
                 });

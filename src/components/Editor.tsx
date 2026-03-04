@@ -21,12 +21,14 @@ const f0FromY = (y: number, h: number) =>
 // Component
 // ──────────────────────────────────────────────
 const Editor = () => {
-    const { files, activeFileId, updateFrqData, undo, redo } = useFrqContext();
+    const { files, activeFileId, updateFrqData, resetFrqData, undo, redo } = useFrqContext();
     const activeFile = files.find(f => f.id === activeFileId);
 
     // ── Canvas refs ────────────────────────────
     const frqCanvasRef = useRef<HTMLCanvasElement>(null);
     const frqContainerRef = useRef<HTMLDivElement>(null);
+    const waveCanvasRef = useRef<HTMLCanvasElement>(null);
+    const waveContainerRef = useRef<HTMLDivElement>(null);
     const spgCanvasRef = useRef<HTMLCanvasElement>(null);
     const spgContainerRef = useRef<HTMLDivElement>(null);
 
@@ -187,26 +189,7 @@ const Editor = () => {
         const startF = Math.max(0, Math.floor(offsetX / ptW));
         const endF = Math.min(frames.length - 1, Math.ceil((offsetX + W) / ptW));
 
-        // 1. Waveform backdrop — compact, 20% canvas height, centred
-        if (waveformData) {
-            const samplesPerFrame = waveformData.length / frames.length;
-            const waveH = H * 0.15; // max half-height of the waveform band
-            const waveCenter = H * 0.10; // pin to top 10% of canvas
-            ctx.fillStyle = 'rgba(140,180,255,0.45)';
-            for (let i = startF; i <= endF; i++) {
-                const s0 = Math.floor(i * samplesPerFrame);
-                const s1 = Math.floor((i + 1) * samplesPerFrame);
-                let mn = 0, mx = 0;
-                for (let s = s0; s < s1 && s < waveformData.length; s++) {
-                    if (waveformData[s] < mn) mn = waveformData[s];
-                    if (waveformData[s] > mx) mx = waveformData[s];
-                }
-                const cx = i * ptW - offsetX;
-                const y1 = waveCenter + mn * waveH;
-                const y2 = waveCenter + mx * waveH;
-                ctx.fillRect(cx, y1, ptW, Math.max(1, y2 - y1));
-            }
-        }
+        // 1. (Waveform is now shown in its own panel above — no overlay here)
 
         // 2. 100 Hz grid lines (light, behind note-pitch ruler)
         ctx.strokeStyle = 'rgba(200,200,200,0.4)';
@@ -376,6 +359,53 @@ const Editor = () => {
 
     useEffect(() => { drawSpectrogram(); }, [drawSpectrogram]);
 
+    // ── Waveform mini-panel draw ────────────────
+    const drawWaveform = useCallback(() => {
+        const canvas = waveCanvasRef.current;
+        const container = waveContainerRef.current;
+        if (!canvas || !container || !waveformData) return;
+
+        const W = container.clientWidth;
+        const H = container.clientHeight;
+        if (canvas.width !== W) canvas.width = W;
+        if (canvas.height !== H) canvas.height = H;
+
+        const ctx = canvas.getContext('2d')!;
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = '#f0f4ff';
+        ctx.fillRect(0, 0, W, H);
+
+        // Draw full waveform (not frame-aligned, just pixel-aligned)
+        const total = waveformData.length;
+        const cy = H / 2;
+        ctx.fillStyle = '#6ea8fe';
+        for (let px = 0; px < W; px++) {
+            const sFrom = Math.floor((px / W) * total);
+            const sTo = Math.floor(((px + 1) / W) * total);
+            let mn = 0, mx = 0;
+            for (let s = sFrom; s < sTo && s < total; s++) {
+                if (waveformData[s] < mn) mn = waveformData[s];
+                if (waveformData[s] > mx) mx = waveformData[s];
+            }
+            const y1 = cy + mn * (H * 0.48);
+            const y2 = cy + mx * (H * 0.48);
+            ctx.fillRect(px, y1, 1, Math.max(1, y2 - y1));
+        }
+
+        // Playhead
+        if (audioRef.current && activeFile?.wavFile) {
+            const dur = audioRef.current.duration || 1;
+            const px = (audioRef.current.currentTime / dur) * W;
+            ctx.strokeStyle = '#e63946';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(px, 0); ctx.lineTo(px, H);
+            ctx.stroke();
+        }
+    }, [waveformData, activeFile, currentTime]);
+
+    useEffect(() => { drawWaveform(); }, [drawWaveform]);
+
     // ── Drawing interactions ───────────────────
     const getFrame = (clientX: number) => {
         const canvas = frqCanvasRef.current;
@@ -513,6 +543,15 @@ const Editor = () => {
                 )}
                 <div style={{ flex: 1 }} />
                 <button
+                    onClick={() => {
+                        if (!activeFile) return;
+                        if (!window.confirm('불러온 초기 상태로 되돌릴까요?\n수정 내역이 모두 사라집니다.')) return;
+                        resetFrqData(activeFile.id);
+                    }}
+                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #f2a20a', borderRadius: 3, background: '#fff8e1', cursor: 'pointer', color: '#7c5600' }}
+                    title="불러온 초기 상태로 초기화"
+                >🔄 초기화</button>
+                <button
                     onClick={() => undo(activeFile.id)}
                     disabled={activeFile.history.length === 0}
                     style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #ccc', borderRadius: 3, background: '#fff', cursor: activeFile.history.length ? 'pointer' : 'default', color: activeFile.history.length ? '#333' : '#bbb' }}
@@ -525,6 +564,21 @@ const Editor = () => {
                     title="다시 실행 (Ctrl+Y)"
                 >↪ 다시</button>
                 <span style={{ fontSize: '11px', color: '#bbb' }}>좌클릭: 그리기 · 우클릭: 지우기 · Ctrl+휠: 확대 · Shift+휠: 이동</span>
+            </div>
+
+            {/* ─── Waveform overview panel ─────────────── */}
+            <div
+                ref={waveContainerRef}
+                style={{ flexShrink: 0, height: '65px', position: 'relative', overflow: 'hidden', background: '#f0f4ff', borderBottom: '1px solid #d0d9f0' }}
+            >
+                {waveformData
+                    ? <canvas ref={waveCanvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+                    : (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#aab', fontSize: 11 }}>
+                            {activeFile.wavFile ? '파형 분석 중…' : 'WAV 파일을 불러오면 파형이 표시됩니다'}
+                        </div>
+                    )
+                }
             </div>
 
             {/* ─── FRQ editor canvas (fills remaining space) ── */}
@@ -562,7 +616,7 @@ const Editor = () => {
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 };
 

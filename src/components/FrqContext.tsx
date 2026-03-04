@@ -5,14 +5,15 @@ export interface FrqFileEntry {
     id: string;
     frqFile: File;
     wavFile: File | null;
-    name: string; // The base name, e.g. _a-a...
-    path: string; // Relative path for tree view
+    name: string;
+    path: string;
     frqData: FrqData;
-    history: FrqData[]; // Stack of past states
-    redoStack: FrqData[]; // Stack of undone states
+    originalFrqData: FrqData;  // immutable copy of the data at load time
+    history: FrqData[];
+    redoStack: FrqData[];
     isModified: boolean;
     expectedF0: number | null;
-    sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only'; // origin of frqData
+    sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only';
 }
 
 interface FrqContextState {
@@ -23,6 +24,7 @@ interface FrqContextState {
     updateFrqData: (id: string, newFrqData: FrqData) => void;
     updateWavFile: (wavFiles: File[]) => void;
     importFrqToEntry: (id: string, frqData: FrqData, frqFile: File, sourceType?: FrqFileEntry['sourceType']) => void;
+    resetFrqData: (id: string) => void;
     undo: (id: string) => void;
     redo: (id: string) => void;
     clearFiles: () => void;
@@ -59,7 +61,15 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     ) => {
         setFiles(prev => prev.map(f => {
             if (f.id !== id) return f;
-            return { ...f, frqData, frqFile, sourceType, history: [], redoStack: [], isModified: false };
+            return { ...f, frqData, originalFrqData: frqData, frqFile, sourceType, history: [], redoStack: [], isModified: false };
+        }));
+    };
+
+    // Reset FRQ data to original loaded state
+    const resetFrqData = (id: string) => {
+        setFiles(prev => prev.map(f => {
+            if (f.id !== id) return f;
+            return { ...f, frqData: f.originalFrqData, history: [], redoStack: [], isModified: false };
         }));
     };
     const setActiveFile = (id: string) => {
@@ -141,7 +151,7 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     }
 
     return (
-        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateWavFile, importFrqToEntry, undo, redo, clearFiles }}>
+        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateWavFile, importFrqToEntry, resetFrqData, undo, redo, clearFiles }}>
             {children}
         </FrqContext.Provider>
     );
