@@ -433,7 +433,8 @@ const Editor = () => {
         isRightDrag.current = e.button === 2;
         const idx = getFrame(e.clientX);
         if (idx >= 0 && idx < activeFile.frqData.frames.length) {
-            const newFrames = [...activeFile.frqData.frames];
+            // Deep copy so history entries are not mutated by subsequent edits
+            const newFrames = activeFile.frqData.frames.map(f => ({ ...f }));
             if (isRightDrag.current) {
                 // Capture the pointer so erase continues even if mouse leaves canvas
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -459,7 +460,8 @@ const Editor = () => {
         const erasing = isRightDrag.current;
         const idx = getFrame(e.clientX);
         if (idx >= 0 && idx < activeFile.frqData.frames.length) {
-            const newFrames = [...activeFile.frqData.frames];
+            // Deep copy so history entries are not mutated by subsequent edits
+            const newFrames = activeFile.frqData.frames.map(f => ({ ...f }));
             if (erasing) {
                 const lo = Math.min(lastDrawPos.current.x, idx);
                 const hi = Math.max(lastDrawPos.current.x, idx);

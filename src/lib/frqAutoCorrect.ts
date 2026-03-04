@@ -1,6 +1,10 @@
 import { type FrqFrame } from './frq';
 
 export interface AutoCorrectOptions {
+    /** Frames with f0 below this (Hz) are treated as noise/silence. Default: 80 Hz */
+    minPitchHz?: number;
+    /** Frames with f0 above this (Hz) are treated as high-freq noise. Default: 800 Hz */
+    maxPitchHz?: number;
     /** Spurious voiced runs shorter than this (frames) are silenced. Default: 4 (~23ms at 256/44100 hop) */
     minVoicedRun?: number;
     /** Silent gaps shorter than this (frames) between voiced regions are interpolated. Default: 8 (~46ms) */
@@ -11,9 +15,10 @@ export interface AutoCorrectOptions {
 
 /**
  * Auto-correct an F0 frame array:
- * 1. Remove noise runs — voiced segments shorter than `minVoicedRun`.
- * 2. Fill gaps — unvoiced segments shorter than `maxFillGap` between voiced sections.
+ * 1. Remove noise — frames below minPitchHz, then runs shorter than minVoicedRun.
+ * 2. Fill gaps — unvoiced segments shorter than maxFillGap between voiced sections.
  * 3. Smooth boundaries with a light Gaussian kernel.
+ * 4. Extend boundary voiced values to file edges (no drop to zero at start/end).
  *
  * Returns a NEW array (does not mutate in-place).
  */
@@ -22,6 +27,8 @@ export function autoCorrectFrq(
     options: AutoCorrectOptions = {},
 ): FrqFrame[] {
     const {
+        minPitchHz = 80,
+        maxPitchHz = 800,
         minVoicedRun = 4,
         maxFillGap = 8,
         smoothPasses = 2,
@@ -31,11 +38,15 @@ export function autoCorrectFrq(
     const out: FrqFrame[] = frames.map(f => ({ ...f }));
     const n = out.length;
 
-    // ── Step 1: remove short voiced runs ────────────────────────────────────
+    // ── Step 1: remove sub-threshold and short voiced runs ───────────────────
+    // First pass: zero any frame below minPitchHz or above maxPitchHz (treat as noise)
+    for (let k = 0; k < n; k++) {
+        if (out[k].f0 > 0 && (out[k].f0 < minPitchHz || out[k].f0 > maxPitchHz)) out[k].f0 = 0;
+    }
+    // Second pass: zero runs shorter than minVoicedRun
     let i = 0;
     while (i < n) {
         if (out[i].f0 <= 0) { i++; continue; }
-        // Find end of this voiced run
         let j = i;
         while (j < n && out[j].f0 > 0) j++;
         const runLen = j - i;
@@ -49,18 +60,16 @@ export function autoCorrectFrq(
     i = 0;
     while (i < n) {
         if (out[i].f0 > 0) { i++; continue; }
-        // Find end of this silent gap
         let j = i;
         while (j < n && out[j].f0 <= 0) j++;
         const gapLen = j - i;
 
-        // We need voiced frames on both sides
         const leftF0 = i > 0 ? out[i - 1].f0 : 0;
         const rightF0 = j < n ? out[j].f0 : 0;
 
         if (gapLen <= maxFillGap && leftF0 > 0 && rightF0 > 0) {
             for (let k = i; k < j; k++) {
-                const t = (k - i + 1) / (gapLen + 1); // 0..1 exclusive
+                const t = (k - i + 1) / (gapLen + 1);
                 out[k].f0 = leftF0 + t * (rightF0 - leftF0);
             }
         }
@@ -83,16 +92,15 @@ export function autoCorrectFrq(
     }
 
     // ── Step 4: extend boundary values to file edges ────────────────────────
-    // Instead of silence (f0=0) at the start/end, hold the nearest voiced pitch
-    // value flat, so the curve doesn't "drop" to the bottom at either end.
-    const firstVoiced = out.findIndex(f => f.f0 > 0);
-    const lastVoiced = n - 1 - [...out].reverse().findIndex(f => f.f0 > 0);
+    // Only extend from the first/last GENUINELY voiced frame (>= minPitchHz)
+    const firstVoiced = out.findIndex(f => f.f0 >= minPitchHz);
+    const lastVoiced = n - 1 - [...out].reverse().findIndex(f => f.f0 >= minPitchHz);
 
     if (firstVoiced > 0) {
         const anchorF0 = out[firstVoiced].f0;
         for (let k = 0; k < firstVoiced; k++) out[k].f0 = anchorF0;
     }
-    if (lastVoiced < n - 1 && lastVoiced >= 0) {
+    if (lastVoiced >= 0 && lastVoiced < n - 1) {
         const anchorF0 = out[lastVoiced].f0;
         for (let k = lastVoiced + 1; k < n; k++) out[k].f0 = anchorF0;
     }
