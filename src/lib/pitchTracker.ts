@@ -2,35 +2,41 @@ import { type FrqData, type FrqFrame } from './frq';
 
 const SAMPLE_RATE = 44100;
 const DEFAULT_HOP_SIZE = 256;
-const WINDOW_SIZE = DEFAULT_HOP_SIZE * 2; // 512 samples – faster than 1024
+// Window must be larger than the longest possible lag (44100/80 ≈ 551 samples)
+// Use 1024 samples but process asynchronously to keep UI responsive
+const WINDOW_SIZE = 1024;
 
 /**
- * Simple autocorrelation-based fundamental frequency estimator.
- * Uses a smaller window (512 samples) and limited lag range for speed.
+ * Autocorrelation-based F0 estimator.
+ * Returns 0 for voiceless/silent frames.
  */
 function computeF0Block(samples: Float32Array, sampleRate: number): number {
-    const minPitch = 80;   // Hz – exclude very low noise
+    const minPitch = 70;   // Hz
     const maxPitch = 800;  // Hz
-    const maxLag = Math.floor(sampleRate / minPitch); // 551
-    const minLag = Math.floor(sampleRate / maxPitch); // 55
+    const maxLag = Math.floor(sampleRate / minPitch); // ~630
+    const minLag = Math.floor(sampleRate / maxPitch); // ~55
 
-    if (samples.length < maxLag * 2) return 0;
+    // Need at least maxLag + some samples to compute autocorrelation
+    if (samples.length < maxLag + 1) return 0;
+
+    // Compute total energy for normalisation
+    let power = 0;
+    for (let i = 0; i < samples.length; i++) power += samples[i] * samples[i];
+    if (power < 1e-9) return 0; // silence
 
     let bestLag = -1;
     let maxAc = -1;
 
-    // Compute power of entire window once (normalisation denominator)
-    let power = 0;
-    for (let i = 0; i < samples.length; i++) power += samples[i] * samples[i];
-    if (power < 1e-8) return 0; // silence
-
     for (let lag = minLag; lag <= maxLag; lag++) {
         let ac = 0;
-        for (let i = 0; i < samples.length - lag; i++) {
+        const n = samples.length - lag;
+        for (let i = 0; i < n; i++) {
             ac += samples[i] * samples[i + lag];
         }
+        // Normalise by approximate window energy at this lag
         ac /= power;
-        if (ac > maxAc && ac > 0.45) {
+        // Lower threshold (0.3) to catch a wider range of voices
+        if (ac > maxAc && ac > 0.30) {
             maxAc = ac;
             bestLag = lag;
         }
@@ -61,8 +67,8 @@ export async function generateBasicF0(
 
             // Octave correction using expected pitch hint
             if (expectedF0 && f0 > 0) {
-                if (f0 > expectedF0 * 1.6) f0 /= 2;
-                else if (f0 < expectedF0 * 0.6) f0 *= 2;
+                if (f0 > expectedF0 * 1.8) f0 /= 2;
+                else if (f0 < expectedF0 * 0.55) f0 *= 2;
             }
 
             // RMS amplitude
@@ -73,14 +79,14 @@ export async function generateBasicF0(
 
             frames.push({ f0, amp });
 
-            // Yield every 50 frames so the UI thread stays responsive
-            if (frames.length % 50 === 0) {
+            // Yield every 40 frames so the UI thread stays responsive
+            if (frames.length % 40 === 0) {
                 onProgress?.(frames.length / totalFrames);
                 await new Promise<void>(resolve => setTimeout(resolve, 0));
             }
         }
 
-        // 3-point median smoothing
+        // 3-point median smoothing to kill glitchy single-frame errors
         for (let i = 1; i < frames.length - 1; i++) {
             if (frames[i - 1].f0 > 0 && frames[i].f0 > 0 && frames[i + 1].f0 > 0) {
                 const s = [frames[i - 1].f0, frames[i].f0, frames[i + 1].f0].sort((a, b) => a - b);
@@ -88,6 +94,7 @@ export async function generateBasicF0(
             }
         }
 
+        onProgress?.(1);
         return {
             samplesPerWindow: DEFAULT_HOP_SIZE,
             windowInterval: (DEFAULT_HOP_SIZE / SAMPLE_RATE) * 1000,

@@ -6,8 +6,8 @@ import type { FrqFrame } from '../lib/frq';
 // ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
-const MIN_FREQ = 0;
-const MAX_FREQ = 1000; // Hz
+const MIN_FREQ = 50;
+const MAX_FREQ = 700; // Hz — narrows Y range for more precise editing
 
 const canvasY = (f0: number, h: number) => {
     if (f0 <= 0) return h;
@@ -187,10 +187,12 @@ const Editor = () => {
         const startF = Math.max(0, Math.floor(offsetX / ptW));
         const endF = Math.min(frames.length - 1, Math.ceil((offsetX + W) / ptW));
 
-        // 1. Waveform backdrop (stored in state)
+        // 1. Waveform backdrop — compact, 20% canvas height, centred
         if (waveformData) {
             const samplesPerFrame = waveformData.length / frames.length;
-            ctx.fillStyle = 'rgba(180,200,255,0.5)';
+            const waveH = H * 0.15; // max half-height of the waveform band
+            const waveCenter = H * 0.10; // pin to top 10% of canvas
+            ctx.fillStyle = 'rgba(140,180,255,0.45)';
             for (let i = startF; i <= endF; i++) {
                 const s0 = Math.floor(i * samplesPerFrame);
                 const s1 = Math.floor((i + 1) * samplesPerFrame);
@@ -200,17 +202,17 @@ const Editor = () => {
                     if (waveformData[s] > mx) mx = waveformData[s];
                 }
                 const cx = i * ptW - offsetX;
-                const y1 = H / 2 + mn * H / 2;
-                const y2 = H / 2 + mx * H / 2;
+                const y1 = waveCenter + mn * waveH;
+                const y2 = waveCenter + mx * waveH;
                 ctx.fillRect(cx, y1, ptW, Math.max(1, y2 - y1));
             }
         }
 
-        // 2. Grid lines
-        ctx.strokeStyle = '#ddd';
-        ctx.lineWidth = 1;
+        // 2. 100 Hz grid lines (light, behind note-pitch ruler)
+        ctx.strokeStyle = 'rgba(200,200,200,0.4)';
+        ctx.lineWidth = 0.5;
         ctx.beginPath();
-        for (let f = 100; f <= MAX_FREQ; f += 100) {
+        for (let f = Math.ceil(MIN_FREQ / 100) * 100; f <= MAX_FREQ; f += 100) {
             const y = canvasY(f, H);
             ctx.moveTo(0, y); ctx.lineTo(W, y);
         }
