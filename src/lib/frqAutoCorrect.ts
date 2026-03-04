@@ -82,5 +82,20 @@ export function autoCorrectFrq(
         }
     }
 
+    // ── Step 4: extend boundary values to file edges ────────────────────────
+    // Instead of silence (f0=0) at the start/end, hold the nearest voiced pitch
+    // value flat, so the curve doesn't "drop" to the bottom at either end.
+    const firstVoiced = out.findIndex(f => f.f0 > 0);
+    const lastVoiced = n - 1 - [...out].reverse().findIndex(f => f.f0 > 0);
+
+    if (firstVoiced > 0) {
+        const anchorF0 = out[firstVoiced].f0;
+        for (let k = 0; k < firstVoiced; k++) out[k].f0 = anchorF0;
+    }
+    if (lastVoiced < n - 1 && lastVoiced >= 0) {
+        const anchorF0 = out[lastVoiced].f0;
+        for (let k = lastVoiced + 1; k < n; k++) out[k].f0 = anchorF0;
+    }
+
     return out;
 }

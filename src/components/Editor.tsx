@@ -426,7 +426,7 @@ const Editor = () => {
         }
     };
 
-    const onPointerDown = (e: MouseEvent<HTMLCanvasElement>) => {
+    const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!activeFile) return;
         if (e.button !== 0 && e.button !== 2) return;
         isDrawing.current = true;
@@ -435,6 +435,8 @@ const Editor = () => {
         if (idx >= 0 && idx < activeFile.frqData.frames.length) {
             const newFrames = [...activeFile.frqData.frames];
             if (isRightDrag.current) {
+                // Capture the pointer so erase continues even if mouse leaves canvas
+                e.currentTarget.setPointerCapture(e.pointerId);
                 newFrames[idx].f0 = 0;
                 lastDrawPos.current = { x: idx, y: 0 };
             } else {
@@ -476,7 +478,9 @@ const Editor = () => {
         }
     };
 
-    const onPointerUp = () => { isDrawing.current = false; lastDrawPos.current = null; };
+    const onPointerUp = () => { isDrawing.current = false; isRightDrag.current = false; lastDrawPos.current = null; };
+    // Only stop left-click drawing on leave; right-click erase is handled by pointer capture
+    const onPointerLeave = () => { if (!isRightDrag.current) { isDrawing.current = false; lastDrawPos.current = null; } };
 
     const onWheel = (e: React.WheelEvent) => {
         if (e.ctrlKey) {
@@ -607,7 +611,7 @@ const Editor = () => {
                     onPointerDown={onPointerDown}
                     onPointerMove={onPointerMove}
                     onPointerUp={onPointerUp}
-                    onPointerLeave={onPointerUp}
+                    onPointerLeave={onPointerLeave}
                     onContextMenu={e => e.preventDefault()}  // prevent right-click menu
                 />
             </div>
