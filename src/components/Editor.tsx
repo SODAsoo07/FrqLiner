@@ -253,7 +253,57 @@ const Editor = () => {
         }
         ctx.stroke();
 
-        // 6. Playhead
+        // 6. Note labels (right-side pitch ruler)
+        // Korean solfège: 도(C) 레(D) 미(E) 파(F) 솔(G) 라(A) 시(B)
+        const NOTE_KO = ['도', '도#', '레', '레#', '미', '파', '파#', '솔', '솔#', '라', '라#', '시'];
+        const FLAT_KO = ['도', '레b', '레', '미b', '미', '파', '솔b', '솔', '라b', '라', '시b', '시'];
+        const LABEL_W = 46; // px reserved on canvas right for labels
+        const CHROMATIC = [0, 2, 4, 5, 7, 9, 11]; // natural note indices
+
+        ctx.save();
+        ctx.font = '10px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+        for (let midi = 24; midi <= 108; midi++) {
+            const hz = 440 * Math.pow(2, (midi - 69) / 12);
+            if (hz > MAX_FREQ) break;
+            const y = canvasY(hz, H);
+            if (y < 0 || y > H) continue;
+
+            const noteIdx = midi % 12;
+            const octave = Math.floor(midi / 12) - 1;
+            const isNatural = CHROMATIC.includes(noteIdx);
+            const isC = noteIdx === 0;
+
+            // Subtle horizontal line for each pitch
+            ctx.strokeStyle = isC
+                ? 'rgba(220,80,80,0.3)'
+                : isNatural
+                    ? 'rgba(0,0,0,0.10)'
+                    : 'rgba(0,0,0,0.04)';
+            ctx.lineWidth = isC ? 1 : 0.5;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+            ctx.stroke();
+
+            // Label only natural notes to reduce clutter
+            if (isNatural) {
+                const sharp = NOTE_KO[noteIdx];
+                const flat = FLAT_KO[noteIdx];
+                const label = sharp === flat ? `${sharp}${octave}` : `${sharp}/${flat}${octave}`;
+
+                // Draw label background for readability
+                const textWidth = ctx.measureText(label).width;
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.fillRect(W - textWidth - 6, y - 6, textWidth + 6, 12);
+
+                ctx.fillStyle = isC ? 'rgba(210,50,50,0.85)' : 'rgba(60,60,80,0.65)';
+                ctx.textAlign = 'right';
+                ctx.fillText(label, W - 4, y + 3.5);
+            }
+        }
+        ctx.restore();
+
+        // 7. Playhead
         if (audioRef.current && activeFile.wavFile) {
             const dur = audioRef.current.duration || 1;
             const cfIdx = (currentTime / dur) * frames.length;
@@ -410,6 +460,29 @@ const Editor = () => {
         return (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa', fontSize: '16px' }}>
                 사이드바에서 편집할 파일을 선택하세요
+            </div>
+        );
+    }
+
+    // ── WAV-only / no-F0 guidance state ────────
+    const hasF0 = activeFile.frqData.frames.length > 0 && activeFile.frqData.frames.some(f => f.f0 > 0);
+    if (!hasF0) {
+        return (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', color: '#888', background: '#fafafa' }}>
+                <div style={{ fontSize: '40px' }}>🎵</div>
+                <div style={{ fontSize: '15px', fontWeight: 600, color: '#555' }}>
+                    {activeFile.name}
+                </div>
+                <div style={{ fontSize: '13px', color: '#999', textAlign: 'center', maxWidth: 380, lineHeight: 1.7 }}>
+                    WAV 파일만 불러왔거나 FRQ 데이터가 없습니다.<br />
+                    편집할 <strong>.frq</strong> 파일을 불러오거나,<br />
+                    툴바의 <strong>🔮 자체 F0 생성</strong> 버튼을 눌러 그래프를 생성하세요.
+                </div>
+                {activeFile.wavFile && (
+                    <div style={{ fontSize: '12px', background: '#e7f5ff', color: '#1971c2', padding: '6px 14px', borderRadius: '6px' }}>
+                        🎵 {activeFile.wavFile.name} 연결됨 — 자체 F0 생성 가능
+                    </div>
+                )}
             </div>
         );
     }

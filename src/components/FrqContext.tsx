@@ -12,6 +12,7 @@ export interface FrqFileEntry {
     redoStack: FrqData[]; // Stack of undone states
     isModified: boolean;
     expectedF0: number | null;
+    sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only'; // origin of frqData
 }
 
 interface FrqContextState {

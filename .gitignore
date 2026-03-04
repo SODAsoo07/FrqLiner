@@ -25,3 +25,5 @@ dist-ssr
 *.exe
 release/FrqLiner_win-unpacked.zip
 /release
+/fileEx
+errors.txt
