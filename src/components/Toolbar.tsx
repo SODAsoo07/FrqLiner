@@ -98,8 +98,8 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             // ── Case 1: real .frq file (or virtual frq injected from MRQ) ──
             if (group.frq) {
                 try {
-                    let frqData = (group as any).frqData;
-                    const sourceType: string = (group as any).sourceType || 'frq';
+                    let frqData = group.frqData;
+                    const sourceType = group.sourceType || 'frq';
                     if (!frqData) {
                         const buffer = await group.frq.arrayBuffer();
                         frqData = parseFrq(buffer);
