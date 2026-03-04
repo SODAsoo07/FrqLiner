@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, type MouseEvent } from 'react
 import { useFrqContext } from './FrqContext';
 import Meyda from 'meyda';
 import type { FrqFrame } from '../lib/frq';
+import { autoCorrectFrq } from '../lib/frqAutoCorrect';
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -546,6 +547,15 @@ const Editor = () => {
                     </span>
                 )}
                 <div style={{ flex: 1 }} />
+                <button
+                    onClick={() => {
+                        if (!activeFile) return;
+                        const corrected = autoCorrectFrq(activeFile.frqData.frames);
+                        updateFrqData(activeFile.id, { ...activeFile.frqData, frames: corrected });
+                    }}
+                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #2f9e44', borderRadius: 3, background: '#ebfbee', cursor: 'pointer', color: '#1a5c28' }}
+                    title="잡선 제거 + 빈 구간 보간 + 스무딩"
+                >✨ 자동 보정</button>
                 <button
                     onClick={() => {
                         if (!activeFile) return;
