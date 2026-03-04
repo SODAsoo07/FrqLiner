@@ -25,7 +25,15 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
 
     // Parse and group all files, then add to context.
     const processFiles = async (fileList: File[]) => {
-        const groups = new Map<string, { frq?: File; wav?: File; pmk?: File; baseName?: string; path?: string }>();
+        const groups = new Map<string, {
+            frq?: File;
+            wav?: File;
+            pmk?: File;
+            baseName?: string;
+            path?: string;
+            frqData?: any;
+            sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only';
+        }>();
 
         for (const file of fileList) {
             const path = file.webkitRelativePath || file.name;

@@ -257,7 +257,6 @@ const Editor = () => {
         // Korean solfège: 도(C) 레(D) 미(E) 파(F) 솔(G) 라(A) 시(B)
         const NOTE_KO = ['도', '도#', '레', '레#', '미', '파', '파#', '솔', '솔#', '라', '라#', '시'];
         const FLAT_KO = ['도', '레b', '레', '미b', '미', '파', '솔b', '솔', '라b', '라', '시b', '시'];
-        const LABEL_W = 46; // px reserved on canvas right for labels
         const CHROMATIC = [0, 2, 4, 5, 7, 9, 11]; // natural note indices
 
         ctx.save();
