@@ -22,6 +22,7 @@ interface FrqContextState {
     setActiveFile: (id: string) => void;
     updateFrqData: (id: string, newFrqData: FrqData) => void;
     updateWavFile: (wavFiles: File[]) => void;
+    importFrqToEntry: (id: string, frqData: FrqData, frqFile: File, sourceType?: FrqFileEntry['sourceType']) => void;
     undo: (id: string) => void;
     redo: (id: string) => void;
     clearFiles: () => void;
@@ -49,6 +50,18 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
         });
     };
 
+    // Merge a newly loaded FRQ/PMK into an existing wav-only placeholder entry
+    const importFrqToEntry = (
+        id: string,
+        frqData: FrqData,
+        frqFile: File,
+        sourceType: FrqFileEntry['sourceType'] = 'frq',
+    ) => {
+        setFiles(prev => prev.map(f => {
+            if (f.id !== id) return f;
+            return { ...f, frqData, frqFile, sourceType, history: [], redoStack: [], isModified: false };
+        }));
+    };
     const setActiveFile = (id: string) => {
         setActiveFileId(id);
     };
@@ -128,7 +141,7 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     }
 
     return (
-        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateWavFile, undo, redo, clearFiles }}>
+        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateWavFile, importFrqToEntry, undo, redo, clearFiles }}>
             {children}
         </FrqContext.Provider>
     );

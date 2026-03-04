@@ -17,7 +17,7 @@ const btnStyle = (color: string, disabled = false): React.CSSProperties => ({
 });
 
 export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () => void, isSidebarOpen: boolean }) => {
-    const { files, addFiles, updateWavFile, clearFiles, updateFrqData } = useFrqContext();
+    const { files, addFiles, updateWavFile, importFrqToEntry, clearFiles, updateFrqData } = useFrqContext();
     const frqInputRef = useRef<HTMLInputElement>(null);
     const wavInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
@@ -91,9 +91,63 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             }
         }
 
+        // ── Cross-reference: merge new groups with already-loaded entries ────
+        // Helper: derive comparable base name from an entry's frqFile.name
+        const entryBase = (entryName: string) =>
+            entryName.replace(/_wav\.frq$/i, '').replace(/\.frq$/i, '').toLowerCase();
+        const groupBase = (g: { baseName?: string }, key: string) =>
+            (g.baseName || key).replace(/_wav\.frq$/i, '').replace(/\.frq$/i, '').replace(/\.wav$/i, '').toLowerCase();
+
+        const keysToSkip = new Set<string>();
+
+        for (const [key, group] of groups.entries()) {
+            const gb = groupBase(group, key);
+
+            // Case A: new group is WAV-only → try to link to an existing FRQ entry
+            if (group.wav && !group.frq && !group.pmk) {
+                const match = files.find(e => entryBase(e.name) === gb);
+                if (match) {
+                    updateWavFile([group.wav]);
+                    keysToSkip.add(key);
+                    continue;
+                }
+            }
+
+            // Case B: new group has FRQ/PMK but no WAV → try to link to existing wav-only entry
+            if ((group.frq || group.pmk) && !group.wav) {
+                const match = files.find(e => entryBase(e.name) === gb && e.sourceType === 'wav-only');
+                if (match) {
+                    try {
+                        let frqData: import('../lib/frq').FrqData;
+                        let frqFileObj: File;
+                        if (group.frq) {
+                            frqFileObj = group.frq;
+                            frqData = parseFrq(await group.frq.arrayBuffer());
+                        } else {
+                            // PMK without WAV – use wav from existing entry
+                            const wavBuf = await match.wavFile!.arrayBuffer();
+                            const ac = new AudioContext();
+                            const decoded = await ac.decodeAudioData(wavBuf.slice(0));
+                            const sr = decoded.sampleRate;
+                            const nf = Math.ceil(decoded.length / 256);
+                            await ac.close();
+                            frqData = parsePmk(await group.pmk!.arrayBuffer(), nf, sr);
+                            frqFileObj = new File([new ArrayBuffer(0)], gb + '_wav.frq');
+                        }
+                        importFrqToEntry(match.id, frqData, frqFileObj, group.frq ? 'frq' : 'pmk');
+                        keysToSkip.add(key);
+                    } catch (e) {
+                        console.error('Merge frq to wav-only failed', e);
+                    }
+                }
+            }
+        }
+
         const newEntries = [];
         for (const [baseName, group] of groups.entries()) {
+            if (keysToSkip.has(baseName)) continue;
             const expectedF0 = extractExpectedF0(group.baseName || baseName);
+
 
             // ── Case 1: real .frq file (or virtual frq injected from MRQ) ──
             if (group.frq) {
