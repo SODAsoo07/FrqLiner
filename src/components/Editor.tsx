@@ -495,9 +495,13 @@ const Editor = () => {
         );
     }
 
-    // ── WAV-only / no-F0 guidance state ────────
-    const hasF0 = activeFile.frqData.frames.length > 0 && activeFile.frqData.frames.some(f => f.f0 > 0);
-    if (!hasF0) {
+    // ── WAV-only guidance state ─────────────────
+    // Only show guidance when no FRQ has ever been loaded (pure wav-only placeholder).
+    // If a user manually erases all F0 data from a real FRQ, keep the editor open so
+    // they can continue drawing.
+    const isWavOnly = activeFile.sourceType === 'wav-only' &&
+        activeFile.frqData.frames.length === 0;
+    if (isWavOnly) {
         return (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', color: '#888', background: '#fafafa' }}>
                 <div style={{ fontSize: '40px' }}>🎵</div>
