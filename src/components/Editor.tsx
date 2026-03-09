@@ -29,10 +29,12 @@ const formatPitch = (f0: number) => {
     const cents = Math.round((midi - roundedMidi) * 100);
     const noteName = NOTE_NAMES[(roundedMidi % 12 + 12) % 12];
     const octave = Math.floor(roundedMidi / 12) - 1;
+    const snappedHz = 440 * Math.pow(2, (roundedMidi - 69) / 12);
 
     return {
         note: `${noteName}${octave}`,
         cents: `${cents > 0 ? '+' : ''}${cents}c`,
+        snappedHz,
         hz: `${f0.toFixed(1)} Hz`,
     };
 };
@@ -235,6 +237,32 @@ const Editor = () => {
             ctx.setLineDash([]);
         }
 
+        const snapGuide = formatPitch(hoverPitch ?? 0);
+        if (snapGuide) {
+            const guideY = canvasY(snapGuide.snappedHz, H);
+            const guideLabel = `Snap ${snapGuide.note} ${snapGuide.cents}`;
+
+            ctx.strokeStyle = 'rgba(255,193,7,0.95)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(0, guideY);
+            ctx.lineTo(W, guideY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            ctx.save();
+            ctx.font = '11px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+            const textWidth = ctx.measureText(guideLabel).width;
+            const labelY = Math.max(12, Math.min(H - 6, guideY - 6));
+            ctx.fillStyle = 'rgba(32,24,0,0.78)';
+            ctx.fillRect(8, labelY - 10, textWidth + 10, 16);
+            ctx.fillStyle = '#ffd43b';
+            ctx.textAlign = 'left';
+            ctx.fillText(guideLabel, 13, labelY + 2);
+            ctx.restore();
+        }
+
         // 4. Amplitude bars (subtle)
         ctx.fillStyle = 'rgba(0,0,0,0.06)';
         for (let i = startF; i <= endF; i++) {
@@ -321,7 +349,7 @@ const Editor = () => {
             ctx.moveTo(px, 0); ctx.lineTo(px, H);
             ctx.stroke();
         }
-    }, [activeFile, zoomX, offsetX, currentTime, waveformData]);
+    }, [activeFile, zoomX, offsetX, currentTime, waveformData, hoverPitch]);
 
     useEffect(() => { drawFrq(); }, [drawFrq]);
 
@@ -466,6 +494,7 @@ const Editor = () => {
                 const canvas = frqCanvasRef.current!;
                 const rect = canvas.getBoundingClientRect();
                 const f0 = f0FromY(e.clientY - rect.top, canvas.height);
+                setHoverPitch(f0);
                 newFrames[idx].f0 = f0;
                 lastDrawPos.current = { x: idx, y: f0 };
             }
