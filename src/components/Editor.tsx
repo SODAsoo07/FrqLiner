@@ -115,6 +115,7 @@ const Editor = () => {
     const [currentTime, setCurrentTime] = useState(0);
     const animFrameRef = useRef<number | null>(null);
     const [hoverPitch, setHoverPitch] = useState<number | null>(null);
+    const [showSpectrogram, setShowSpectrogram] = useState(true);
     const [globalSpectrogramQuality, setGlobalSpectrogramQuality] = useState<SpectrogramQuality>('low');
     const [fileSpectrogramQualities, setFileSpectrogramQualities] = useState<Record<string, SpectrogramQuality>>({});
 
@@ -184,7 +185,7 @@ const Editor = () => {
     }, [files]);
 
     useEffect(() => {
-        if (!waveformData || !waveformSampleRate || !activeFile?.wavFile) {
+        if (!showSpectrogram || !waveformData || !waveformSampleRate || !activeFile?.wavFile) {
             setSpectrogramData(null);
             return;
         }
@@ -244,7 +245,7 @@ const Editor = () => {
 
         buildSpectrogram();
         return () => { cancelled = true; };
-    }, [activeFile?.id, activeFile?.wavFile, activeSpectrogramQuality, waveformData, waveformSampleRate]);
+    }, [activeFile?.id, activeFile?.wavFile, activeSpectrogramQuality, waveformData, waveformSampleRate, showSpectrogram]);
 
     // ── Keyboard shortcuts ─────────────────────
     useEffect(() => {
@@ -751,8 +752,17 @@ const Editor = () => {
                     </span>
                 )}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
+                    <input
+                        type="checkbox"
+                        checked={showSpectrogram}
+                        onChange={e => setShowSpectrogram(e.target.checked)}
+                    />
+                    Spectrogram
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
                     Global
                     <select
+                        disabled={!showSpectrogram}
                         value={globalSpectrogramQuality}
                         onChange={e => {
                             const nextQuality = e.target.value as SpectrogramQuality;
@@ -769,6 +779,7 @@ const Editor = () => {
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
                     This file
                     <select
+                        disabled={!showSpectrogram}
                         value={activeFile ? (fileSpectrogramQualities[activeFile.id] ?? '__global__') : '__global__'}
                         onChange={e => {
                             if (!activeFile) return;
@@ -790,7 +801,7 @@ const Editor = () => {
                         <option value="high">High</option>
                     </select>
                 </label>
-                {activeFile.wavFile && !spectrogramData && (
+                {showSpectrogram && activeFile.wavFile && !spectrogramData && (
                     <span style={{ fontSize: '11px', color: '#8a6d3b', background: '#fff3cd', padding: '1px 6px', borderRadius: 3 }}>
                         Loading spectrogram...
                     </span>
@@ -850,11 +861,16 @@ const Editor = () => {
                 style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: 'crosshair', minHeight: 0, background: activeFile.wavFile ? '#787878' : '#fff' }}
                 onWheel={onWheel}
             >
-                <canvas
-                    ref={spgCanvasRef}
-                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }}
-                />
-                {!activeFile.wavFile && (
+                {showSpectrogram && (
+                    <canvas
+                        ref={spgCanvasRef}
+                        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }}
+                    />
+                )}
+                {!showSpectrogram && (
+                    <div style={{ position: 'absolute', inset: 0, background: '#fff', pointerEvents: 'none' }} />
+                )}
+                {showSpectrogram && !activeFile.wavFile && (
                     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontSize: 12, pointerEvents: 'none' }}>
                         WAV 甯護攵・・・壱洳・､・ｴ ・・・､寬呰敢・懋ｷｸ・ｨ・ｴ 岺懍亨・ｩ・壱共
                     </div>
@@ -868,7 +884,7 @@ const Editor = () => {
                     onPointerLeave={onPointerLeave}
                     onContextMenu={e => e.preventDefault()}  // prevent right-click menu
                 />
-                {activeFile.wavFile && !spectrogramData && (
+                {showSpectrogram && activeFile.wavFile && !spectrogramData && (
                     <div style={{ position: 'absolute', right: 12, top: 12, fontSize: 11, color: '#f1f3f5', background: 'rgba(0,0,0,0.35)', padding: '4px 8px', borderRadius: 4, pointerEvents: 'none' }}>
                         Loading spectrogram...
                     </div>
