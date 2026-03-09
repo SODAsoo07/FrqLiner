@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback, type MouseEvent } from 'react';
 import { useFrqContext } from './FrqContext';
+import { useLanguage } from './LanguageContext';
 import Meyda from 'meyda';
 import type { FrqFrame } from '../lib/frq';
 import { autoCorrectFrq } from '../lib/frqAutoCorrect';
@@ -88,6 +89,7 @@ const formatPitch = (f0: number) => {
 // ──────────────────────────────────────────────
 const Editor = () => {
     const { files, activeFileId, updateFrqData, resetFrqData, undo, redo } = useFrqContext();
+    const { t } = useLanguage();
     const activeFile = files.find(f => f.id === activeFileId);
 
     // ── Canvas refs ────────────────────────────
@@ -744,11 +746,11 @@ const Editor = () => {
                 )}
                 {activeFile.wavFile ? (
                     <span style={{ fontSize: '11px', background: '#cff4fc', color: '#055160', padding: '1px 6px', borderRadius: 3 }}>
-                        🎵 WAV 연결됨 · 스페이스바로 재생
+                        {t('wavConnected')}
                     </span>
                 ) : (
                     <span style={{ fontSize: '11px', color: '#999' }}>
-                        WAV 미연결
+                        {t('wavMissing')}
                     </span>
                 )}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
@@ -757,10 +759,10 @@ const Editor = () => {
                         checked={showSpectrogram}
                         onChange={e => setShowSpectrogram(e.target.checked)}
                     />
-                    Spectrogram
+                    {t('spectrogram')}
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
-                    Global
+                    {t('global')}
                     <select
                         disabled={!showSpectrogram}
                         value={globalSpectrogramQuality}
@@ -771,13 +773,13 @@ const Editor = () => {
                         }}
                         style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
                     >
-                        <option value="low">Low</option>
-                        <option value="default">Default</option>
-                        <option value="high">High</option>
+                        <option value="low">{t('low')}</option>
+                        <option value="default">{t('default')}</option>
+                        <option value="high">{t('high')}</option>
                     </select>
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
-                    This file
+                    {t('thisFile')}
                     <select
                         disabled={!showSpectrogram}
                         value={activeFile ? (fileSpectrogramQualities[activeFile.id] ?? '__global__') : '__global__'}
@@ -795,15 +797,15 @@ const Editor = () => {
                         }}
                         style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
                     >
-                        <option value="__global__">Use Global</option>
-                        <option value="low">Low</option>
-                        <option value="default">Default</option>
-                        <option value="high">High</option>
+                        <option value="__global__">{t('useGlobal')}</option>
+                        <option value="low">{t('low')}</option>
+                        <option value="default">{t('default')}</option>
+                        <option value="high">{t('high')}</option>
                     </select>
                 </label>
                 {showSpectrogram && activeFile.wavFile && !spectrogramData && (
                     <span style={{ fontSize: '11px', color: '#8a6d3b', background: '#fff3cd', padding: '1px 6px', borderRadius: 3 }}>
-                        Loading spectrogram...
+                        {t('loadingSpectrogram')}
                     </span>
                 )}
                 <div style={{ flex: 1 }} />
@@ -813,31 +815,31 @@ const Editor = () => {
                         const corrected = autoCorrectFrq(activeFile.frqData.frames);
                         updateFrqData(activeFile.id, { ...activeFile.frqData, frames: corrected });
                     }}
-                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #2f9e44', borderRadius: 3, background: '#ebfbee', cursor: 'pointer', color: '#1a5c28' }}
-                    title="잡선 제거 + 빈 구간 보간 + 스무딩"
-                >✨ 자동 보정</button>
+                    style={{ fontSize: '13px', padding: '7px 14px', border: '1px solid #15803d', borderRadius: 999, background: 'linear-gradient(180deg, #4ade80 0%, #16a34a 100%)', cursor: 'pointer', color: '#fff', fontWeight: 800, boxShadow: '0 1px 0 rgba(255,255,255,0.25) inset, 0 3px 10px rgba(22,163,74,0.35)' }}
+                    title={t('autoCorrectHint')}
+                >{t('autoCorrect')}</button>
                 <button
                     onClick={() => {
                         if (!activeFile) return;
-                        if (!window.confirm('불러온 초기 상태로 되돌릴까요?\n수정 내역이 모두 사라집니다.')) return;
+                        if (!window.confirm(t('resetConfirm'))) return;
                         resetFrqData(activeFile.id);
                     }}
                     style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #f2a20a', borderRadius: 3, background: '#fff8e1', cursor: 'pointer', color: '#7c5600' }}
-                    title="불러온 초기 상태로 초기화"
-                >🔄 초기화</button>
+                    title={t('resetHint')}
+                >{t('reset')}</button>
                 <button
                     onClick={() => undo(activeFile.id)}
                     disabled={activeFile.history.length === 0}
                     style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #ccc', borderRadius: 3, background: '#fff', cursor: activeFile.history.length ? 'pointer' : 'default', color: activeFile.history.length ? '#333' : '#bbb' }}
-                    title="실행 취소 (Ctrl+Z)"
-                >↩ 취소</button>
+                    title={t('undoHint')}
+                >{t('undo')}</button>
                 <button
                     onClick={() => redo(activeFile.id)}
                     disabled={activeFile.redoStack.length === 0}
                     style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #ccc', borderRadius: 3, background: '#fff', cursor: activeFile.redoStack.length ? 'pointer' : 'default', color: activeFile.redoStack.length ? '#333' : '#bbb' }}
-                    title="다시 실행 (Ctrl+Y)"
-                >↪ 다시</button>
-                <span style={{ fontSize: '11px', color: '#bbb' }}>좌클릭: 그리기 · 우클릭: 지우기 · Ctrl+휠: 확대 · Shift+휠: 이동</span>
+                    title={t('redoHint')}
+                >{t('redo')}</button>
+                <span style={{ fontSize: '11px', color: '#888' }}>{t('shortcuts')}</span>
             </div>
 
             {/* ─── Waveform overview panel ─────────────── */}
@@ -849,7 +851,7 @@ const Editor = () => {
                     ? <canvas ref={waveCanvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
                     : (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#aab', fontSize: 11 }}>
-                            {activeFile.wavFile ? '파형 분석 중…' : 'WAV 파일을 불러오면 파형이 표시됩니다'}
+                            {activeFile.wavFile ? t('waveformReady') : t('waveformRequiresWav')}
                         </div>
                     )
                 }

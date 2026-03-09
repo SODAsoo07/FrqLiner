@@ -1,10 +1,8 @@
 import { useState } from 'react';
 import { useFrqContext, type FrqFileEntry } from './FrqContext';
+import { useLanguage } from './LanguageContext';
 import { writeFrq } from '../lib/frq';
 
-// ────────────────────────────────────────────────────────
-// Tree node types
-// ────────────────────────────────────────────────────────
 interface TreeNode {
     name: string;
     path: string;
@@ -14,42 +12,42 @@ interface TreeNode {
 
 const buildTree = (files: FrqFileEntry[]) => {
     const root: TreeNode = { name: 'root', path: '', children: {} };
-    for (const f of files) {
-        const parts = f.path.split('/');
-        let cur = root;
+    for (const file of files) {
+        const parts = file.path.split('/');
+        let current = root;
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
-            if (!cur.children[part]) {
-                cur.children[part] = { name: part, path: parts.slice(0, i + 1).join('/'), children: {} };
+            if (!current.children[part]) {
+                current.children[part] = {
+                    name: part,
+                    path: parts.slice(0, i + 1).join('/'),
+                    children: {},
+                };
             }
-            cur = cur.children[part];
-            if (i === parts.length - 1) cur.file = f;
+            current = current.children[part];
+            if (i === parts.length - 1) current.file = file;
         }
     }
     return root;
 };
 
-// ────────────────────────────────────────────────────────
-// Per-file download helper
-// ────────────────────────────────────────────────────────
 const downloadFrq = (entry: FrqFileEntry) => {
-    const buffer = writeFrq(entry.frqData);
-    const blob = new Blob([buffer], { type: 'application/octet-stream' });
+    const blob = new Blob([writeFrq(entry.frqData)], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = entry.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = entry.name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
 };
 
-// ────────────────────────────────────────────────────────
-// TreeItem
-// ────────────────────────────────────────────────────────
 const TreeItem = ({
-    node, activeId, onSelect, depth = 0,
+    node,
+    activeId,
+    onSelect,
+    depth = 0,
 }: {
     node: TreeNode;
     activeId: string | null;
@@ -57,8 +55,8 @@ const TreeItem = ({
     depth?: number;
 }) => {
     const [isOpen, setIsOpen] = useState(true);
-    const isFile = !!node.file;
-    const hasKids = Object.keys(node.children).length > 0;
+    const isFile = Boolean(node.file);
+    const hasChildren = Object.keys(node.children).length > 0;
     const isActive = isFile && activeId === node.file!.id;
 
     if (node.name === 'root') {
@@ -85,10 +83,9 @@ const TreeItem = ({
                 }}
                 onClick={() => {
                     if (isFile) onSelect(node.file!.id);
-                    else if (hasKids) setIsOpen(o => !o);
+                    else if (hasChildren) setIsOpen(open => !open);
                 }}
             >
-                {/* folder arrow */}
                 {!isFile && (
                     <span style={{ fontSize: '10px', color: '#888', width: 14, flexShrink: 0 }}>
                         {isOpen ? '▼' : '▶'}
@@ -96,33 +93,44 @@ const TreeItem = ({
                 )}
                 {isFile && <span style={{ width: 14, flexShrink: 0 }} />}
 
-                {/* name */}
-                <span style={{
-                    flex: 1, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap', color: isActive ? '#003580' : '#333',
-                    fontWeight: isFile ? 'normal' : '600',
-                }}>
+                <span
+                    style={{
+                        flex: 1,
+                        fontSize: '13px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        color: isActive ? '#003580' : '#333',
+                        fontWeight: isFile ? 'normal' : '600',
+                    }}
+                >
                     {isFile ? node.file!.name : node.name}
                 </span>
 
-                {/* badges + download button */}
                 {isFile && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, marginLeft: 4 }}>
-                        {node.file!.wavFile && (
-                            <span style={{ fontSize: '10px', color: '#0dcaf0' }} title="WAV 연결됨">♪</span>
-                        )}
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 4 }}>
+                        {node.file!.wavFile && <span style={{ fontSize: '10px', color: '#0dcaf0' }}>WAV</span>}
                         {node.file!.isModified && (
-                            <span style={{ fontSize: '11px', color: '#28a745', fontWeight: 'bold' }}>●</span>
+                            <span style={{ fontSize: '11px', color: '#28a745', fontWeight: 'bold' }}>*</span>
                         )}
-                        {/* Individual download button */}
                         <button
-                            title={`${node.file!.name} 다운로드`}
-                            onClick={e => { e.stopPropagation(); downloadFrq(node.file!); }}
-                            style={{
-                                border: 'none', background: 'transparent', cursor: 'pointer',
-                                fontSize: '13px', padding: '0 2px', lineHeight: 1, color: '#555',
+                            title={node.file!.name}
+                            onClick={event => {
+                                event.stopPropagation();
+                                downloadFrq(node.file!);
                             }}
-                        >⬇</button>
+                            style={{
+                                border: 'none',
+                                background: 'transparent',
+                                cursor: 'pointer',
+                                fontSize: '13px',
+                                padding: '0 2px',
+                                lineHeight: 1,
+                                color: '#555',
+                            }}
+                        >
+                            ↓
+                        </button>
                     </span>
                 )}
             </div>
@@ -138,22 +146,20 @@ const TreeItem = ({
     );
 };
 
-// ────────────────────────────────────────────────────────
-// Sidebar
-// ────────────────────────────────────────────────────────
 export const Sidebar = () => {
     const { files, activeFileId, setActiveFile } = useFrqContext();
+    const { t } = useLanguage();
     const tree = buildTree(files);
 
     return (
         <div style={{ width: '220px', borderRight: '1px solid #ddd', background: '#fafafa', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
             <div style={{ padding: '8px 10px', fontWeight: '600', fontSize: '12px', color: '#555', borderBottom: '1px solid #ddd', letterSpacing: '0.03em' }}>
-                파일 목록 ({files.length})
+                {t('sidebarTitle', { count: files.length })}
             </div>
             <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
                 {files.length === 0 ? (
                     <div style={{ padding: '16px 10px', color: '#aaa', fontSize: '13px', lineHeight: 1.6 }}>
-                        폴더나 파일을 불러와서 시작하세요.
+                        {t('sidebarEmpty')}
                     </div>
                 ) : (
                     <TreeItem node={tree} activeId={activeFileId} onSelect={setActiveFile} />
