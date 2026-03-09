@@ -10,6 +10,9 @@ import { autoCorrectFrq } from '../lib/frqAutoCorrect';
 const MIN_FREQ = 50;
 const MAX_FREQ = 700; // Hz — narrows Y range for more precise editing
 
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const NATURAL_NOTES = new Set([0, 2, 4, 5, 7, 9, 11]);
+
 const canvasY = (f0: number, h: number) => {
     if (f0 <= 0) return h;
     return Math.max(0, Math.min(h - ((f0 - MIN_FREQ) / (MAX_FREQ - MIN_FREQ)) * h, h));
@@ -17,6 +20,22 @@ const canvasY = (f0: number, h: number) => {
 
 const f0FromY = (y: number, h: number) =>
     Math.max(0, MIN_FREQ + ((h - y) / h) * (MAX_FREQ - MIN_FREQ));
+
+const formatPitch = (f0: number) => {
+    if (!Number.isFinite(f0) || f0 <= 0) return null;
+
+    const midi = 69 + 12 * Math.log2(f0 / 440);
+    const roundedMidi = Math.round(midi);
+    const cents = Math.round((midi - roundedMidi) * 100);
+    const noteName = NOTE_NAMES[(roundedMidi % 12 + 12) % 12];
+    const octave = Math.floor(roundedMidi / 12) - 1;
+
+    return {
+        note: `${noteName}${octave}`,
+        cents: `${cents > 0 ? '+' : ''}${cents}c`,
+        hz: `${f0.toFixed(1)} Hz`,
+    };
+};
 
 // ──────────────────────────────────────────────
 // Component
@@ -48,6 +67,7 @@ const Editor = () => {
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const animFrameRef = useRef<number | null>(null);
+    const [hoverPitch, setHoverPitch] = useState<number | null>(null);
 
     // Storing decoded audio as STATE so renders are triggered
     const [waveformData, setWaveformData] = useState<Float32Array | null>(null);
@@ -61,6 +81,7 @@ const Editor = () => {
         setIsPlaying(false);
         setWaveformData(null);
         setSpectrogramData(null);
+        setHoverPitch(null);
 
         if (audioRef.current) {
             audioRef.current.pause();
@@ -244,6 +265,9 @@ const Editor = () => {
         const NOTE_KO = ['도', '도#', '레', '레#', '미', '파', '파#', '솔', '솔#', '라', '라#', '시'];
         const FLAT_KO = ['도', '레b', '레', '미b', '미', '파', '솔b', '솔', '라b', '라', '시b', '시'];
         const CHROMATIC = [0, 2, 4, 5, 7, 9, 11]; // natural note indices
+        void NOTE_KO;
+        void FLAT_KO;
+        void CHROMATIC;
 
         ctx.save();
         ctx.font = '10px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
@@ -255,7 +279,7 @@ const Editor = () => {
 
             const noteIdx = midi % 12;
             const octave = Math.floor(midi / 12) - 1;
-            const isNatural = CHROMATIC.includes(noteIdx);
+            const isNatural = NATURAL_NOTES.has(noteIdx);
             const isC = noteIdx === 0;
 
             // Subtle horizontal line for each pitch
@@ -272,9 +296,7 @@ const Editor = () => {
 
             // Label only natural notes to reduce clutter
             if (isNatural) {
-                const sharp = NOTE_KO[noteIdx];
-                const flat = FLAT_KO[noteIdx];
-                const label = sharp === flat ? `${sharp}${octave}` : `${sharp}/${flat}${octave}`;
+                const label = `${NOTE_NAMES[noteIdx]}${octave}`;
 
                 // Draw label background for readability
                 const textWidth = ctx.measureText(label).width;
@@ -452,6 +474,12 @@ const Editor = () => {
     };
 
     const onPointerMove = (e: MouseEvent<HTMLCanvasElement>) => {
+        const canvas = frqCanvasRef.current;
+        if (canvas) {
+            const rect = canvas.getBoundingClientRect();
+            setHoverPitch(f0FromY(e.clientY - rect.top, canvas.height));
+        }
+
         if (!isDrawing.current || !activeFile || !lastDrawPos.current) return;
         // Check if the right or left button is still held
         const leftHeld = (e.buttons & 1) !== 0;
@@ -482,7 +510,10 @@ const Editor = () => {
 
     const onPointerUp = () => { isDrawing.current = false; isRightDrag.current = false; lastDrawPos.current = null; };
     // Only stop left-click drawing on leave; right-click erase is handled by pointer capture
-    const onPointerLeave = () => { if (!isRightDrag.current) { isDrawing.current = false; lastDrawPos.current = null; } };
+    const onPointerLeave = () => {
+        setHoverPitch(null);
+        if (!isRightDrag.current) { isDrawing.current = false; lastDrawPos.current = null; }
+    };
 
     const onWheel = (e: React.WheelEvent) => {
         if (e.ctrlKey) {
@@ -508,6 +539,8 @@ const Editor = () => {
     // they can continue drawing.
     const isWavOnly = activeFile.sourceType === 'wav-only' &&
         activeFile.frqData.frames.length === 0;
+    const expectedPitchInfo = formatPitch(activeFile.expectedF0 ?? 0);
+    const hoverPitchInfo = formatPitch(hoverPitch ?? 0);
     if (isWavOnly) {
         return (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', color: '#888', background: '#fafafa' }}>
@@ -540,7 +573,12 @@ const Editor = () => {
                 </strong>
                 {activeFile.expectedF0 && (
                     <span style={{ fontSize: '11px', background: '#e9ecef', padding: '1px 6px', borderRadius: 3 }}>
-                        {Math.round(activeFile.expectedF0)} Hz
+                        {expectedPitchInfo ? `${expectedPitchInfo.note} ${Math.round(activeFile.expectedF0)} Hz` : `${Math.round(activeFile.expectedF0)} Hz`}
+                    </span>
+                )}
+                {hoverPitchInfo && (
+                    <span style={{ fontSize: '11px', background: '#fff3bf', color: '#5f3b00', padding: '1px 6px', borderRadius: 3 }}>
+                        {hoverPitchInfo.note} {hoverPitchInfo.cents} {hoverPitchInfo.hz}
                     </span>
                 )}
                 {activeFile.wavFile ? (
@@ -589,7 +627,7 @@ const Editor = () => {
             {/* ─── Waveform overview panel ─────────────── */}
             <div
                 ref={waveContainerRef}
-                style={{ flexShrink: 0, height: '65px', position: 'relative', overflow: 'hidden', background: '#f0f4ff', borderBottom: '1px solid #d0d9f0' }}
+                style={{ order: 3, flexShrink: 0, height: '65px', position: 'relative', overflow: 'hidden', background: '#f0f4ff', borderTop: '1px solid #d0d9f0' }}
             >
                 {waveformData
                     ? <canvas ref={waveCanvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
@@ -604,7 +642,7 @@ const Editor = () => {
             {/* ─── FRQ editor canvas (fills remaining space) ── */}
             <div
                 ref={frqContainerRef}
-                style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: 'crosshair', minHeight: 0 }}
+                style={{ order: 2, flex: 1, position: 'relative', overflow: 'hidden', cursor: 'crosshair', minHeight: 0 }}
                 onWheel={onWheel}
             >
                 <canvas
@@ -621,7 +659,7 @@ const Editor = () => {
             {/* ─── Spectrogram ────────────────────────────── */}
             <div
                 ref={spgContainerRef}
-                style={{ flexShrink: 0, height: '130px', position: 'relative', overflow: 'hidden', background: '#111' }}
+                style={{ order: 1, flexShrink: 0, height: '130px', position: 'relative', overflow: 'hidden', background: '#111', borderBottom: '1px solid #2b2b2b' }}
                 onWheel={onWheel}
             >
                 <canvas ref={spgCanvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />

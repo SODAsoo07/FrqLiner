@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import { useFrqContext } from './FrqContext';
 import { extractExpectedF0 } from '../lib/pitch';
 import { parseMrq, parsePmk, parseFrq, writeFrq, type FrqFrame } from '../lib/frq';
+import { normalizeFrqPath } from '../lib/filePath';
 import { generateBasicF0 } from '../lib/pitchTracker';
 
 const btnStyle = (color: string, disabled = false): React.CSSProperties => ({
@@ -163,7 +164,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         frqFile: group.frq,
                         wavFile: group.wav || null,
                         name: group.frq.name,
-                        path: group.path || group.frq.name,
+                        path: normalizeFrqPath(group.path || group.frq.name, group.frq.name),
                         frqData, originalFrqData: frqData,
                         history: [], redoStack: [], isModified: false,
                         expectedF0, sourceType
@@ -203,7 +204,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         frqFile: dummyFrqFile,
                         wavFile: group.wav || null,
                         name: frqName,
-                        path: (group.path || group.pmk.name).replace(/\.pmk$/i, '_wav.frq'),
+                        path: normalizeFrqPath(group.path || group.pmk.name, frqName),
                         frqData, originalFrqData: frqData,
                         history: [], redoStack: [], isModified: false,
                         expectedF0, sourceType: 'pmk' as const
@@ -227,7 +228,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                     frqFile: dummyFrqFile,
                     wavFile: group.wav,
                     name: frqName,
-                    path: group.path?.replace(/\.wav$/i, '_wav.frq') || frqName,
+                    path: normalizeFrqPath(group.path || group.wav.name, frqName),
                     frqData: emptyFrqData, originalFrqData: emptyFrqData,
                     history: [], redoStack: [], isModified: false,
                     expectedF0, sourceType: 'wav-only' as const
@@ -261,7 +262,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
         const zip = new JSZip();
         for (const entry of files) {
             const newBuffer = writeFrq(entry.frqData);
-            zip.file(entry.path, newBuffer);
+            zip.file(normalizeFrqPath(entry.path, entry.name), newBuffer);
         }
         const blob = await zip.generateAsync({ type: 'blob' });
         const url = URL.createObjectURL(blob);
