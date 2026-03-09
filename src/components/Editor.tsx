@@ -13,10 +13,10 @@ const MAX_FREQ = 700; // Hz — narrows Y range for more precise editing
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const NATURAL_NOTES = new Set([0, 2, 4, 5, 7, 9, 11]);
 type SpectrogramQuality = 'low' | 'default' | 'high';
-const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSize: number; melBands: number; gain: number }> = {
-    low: { bufferSize: 512, hopSize: 512, melBands: 24, gain: 72 },
-    default: { bufferSize: 1024, hopSize: 512, melBands: 36, gain: 62 },
-    high: { bufferSize: 2048, hopSize: 256, melBands: 48, gain: 56 },
+const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSize: number; melBands: number; visibleBins: number; gain: number }> = {
+    low: { bufferSize: 512, hopSize: 512, melBands: 24, visibleBins: 36, gain: 72 },
+    default: { bufferSize: 1024, hopSize: 512, melBands: 40, visibleBins: 60, gain: 62 },
+    high: { bufferSize: 2048, hopSize: 256, melBands: 64, visibleBins: 96, gain: 56 },
 };
 
 const canvasY = (f0: number, h: number) => {
@@ -28,7 +28,32 @@ const f0FromY = (y: number, h: number) =>
     Math.max(0, MIN_FREQ + ((h - y) / h) * (MAX_FREQ - MIN_FREQ));
 
 const freqToMel = (freq: number) => 2595 * Math.log10(1 + freq / 700);
-const melToFreq = (mel: number) => 700 * (Math.pow(10, mel / 2595) - 1);
+
+const remapMelRowToVisibleBins = (
+    row: number[],
+    visibleBins: number,
+    sampleRate: number,
+    gain: number,
+) => {
+    const remapped = new Uint8Array(visibleBins);
+    const maxMel = freqToMel(sampleRate / 2);
+    const maxIndex = Math.max(1, row.length - 1);
+
+    for (let i = 0; i < visibleBins; i++) {
+        const freq = MIN_FREQ + (i / Math.max(1, visibleBins - 1)) * (MAX_FREQ - MIN_FREQ);
+        const mel = freqToMel(freq);
+        const sourceIndex = Math.min(maxIndex, (mel / maxMel) * maxIndex);
+        const leftIndex = Math.floor(sourceIndex);
+        const rightIndex = Math.min(maxIndex, leftIndex + 1);
+        const blend = sourceIndex - leftIndex;
+        const leftValue = row[leftIndex] ?? 0;
+        const rightValue = row[rightIndex] ?? leftValue;
+        const interpolated = leftValue + (rightValue - leftValue) * blend;
+        remapped[i] = Math.min(255, Math.log1p(interpolated) * gain);
+    }
+
+    return remapped;
+};
 
 const formatPitch = (f0: number) => {
     if (!Number.isFinite(f0) || f0 <= 0) return null;
@@ -128,7 +153,7 @@ const Editor = () => {
                     const decoded = await audioCtxRef.current.decodeAudioData(rawBuffer);
 
                     // Store waveform PCM as STATE so render is triggered
-                    setWaveformData(new Float32Array(decoded.getChannelData(0)));
+                    setWaveformData(decoded.getChannelData(0).slice());
                     setWaveformSampleRate(decoded.sampleRate);
                 } catch (err) {
                     console.error('Audio decode failed:', err);
@@ -185,11 +210,14 @@ const Editor = () => {
                     const result = Meyda.extract('melBands', slice) as number[] | null;
                     if (!result) continue;
 
-                    const row = new Uint8Array(result.length);
-                    for (let k = 0; k < result.length; k++) {
-                        row[k] = Math.min(255, Math.log1p(result[k]) * config.gain);
-                    }
-                    bands.push(row);
+                    bands.push(
+                        remapMelRowToVisibleBins(
+                            result,
+                            config.visibleBins,
+                            waveformSampleRate,
+                            config.gain,
+                        ),
+                    );
 
                     if (bands.length % 120 === 0) {
                         await new Promise(resolve => setTimeout(resolve, 0));
@@ -432,7 +460,7 @@ const Editor = () => {
         ctx.fillStyle = '#787878';
         ctx.fillRect(0, 0, W, H);
 
-        if (!spectrogramData || !activeFile || spectrogramData.length === 0 || !waveformSampleRate) return;
+        if (!spectrogramData || !activeFile || spectrogramData.length === 0) return;
 
         const frames = activeFile.frqData.frames;
         const ptW = Math.max(1, (W / frames.length) * zoomX);
@@ -441,7 +469,7 @@ const Editor = () => {
         const totalSlices = spectrogramData.length;
         const slicesPerFrame = totalSlices / frames.length;
         const bins = spectrogramData[0].length;
-        const maxMel = freqToMel(waveformSampleRate / 2);
+        const binH = H / bins;
 
         for (let i = startF; i <= endF; i++) {
             const cx = i * ptW - offsetX;
@@ -452,17 +480,11 @@ const Editor = () => {
             for (let b = 0; b < bins; b++) {
                 const v = row[b];
                 if (v < 8) continue;
-                const bandLowFreq = melToFreq((b / bins) * maxMel);
-                const bandHighFreq = melToFreq(((b + 1) / bins) * maxMel);
-                if (bandHighFreq < MIN_FREQ || bandLowFreq > MAX_FREQ) continue;
-
-                const yTop = canvasY(Math.min(MAX_FREQ, bandHighFreq), H);
-                const yBottom = canvasY(Math.max(MIN_FREQ, bandLowFreq), H);
                 const r = Math.min(255, v * 2.5);
                 const g = Math.min(255, Math.max(0, v * 2 - 80));
                 const bl = Math.min(255, Math.max(0, v * 2 - 180));
                 ctx.fillStyle = `rgba(${r},${g},${bl},0.82)`;
-                ctx.fillRect(cx, yTop, ptW + 0.5, Math.max(1, yBottom - yTop));
+                ctx.fillRect(cx, H - (b + 1) * binH, ptW + 0.5, binH + 0.5);
             }
         }
 
@@ -477,7 +499,7 @@ const Editor = () => {
             ctx.moveTo(px, 0); ctx.lineTo(px, H);
             ctx.stroke();
         }
-    }, [activeFile, zoomX, offsetX, currentTime, spectrogramData, waveformSampleRate]);
+    }, [activeFile, zoomX, offsetX, currentTime, spectrogramData]);
 
     useEffect(() => { drawSpectrogram(); }, [drawSpectrogram]);
 
