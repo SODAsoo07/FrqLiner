@@ -16,12 +16,17 @@ export interface FrqFileEntry {
     sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only';
 }
 
+interface UpdateFrqOptions {
+    pushHistory?: boolean;
+    historyBase?: FrqData;
+}
+
 interface FrqContextState {
     files: FrqFileEntry[];
     activeFileId: string | null;
     addFiles: (entries: FrqFileEntry[]) => void;
     setActiveFile: (id: string) => void;
-    updateFrqData: (id: string, newFrqData: FrqData) => void;
+    updateFrqData: (id: string, newFrqData: FrqData, options?: UpdateFrqOptions) => void;
     updateWavFile: (wavFiles: File[]) => void;
     importFrqToEntry: (id: string, frqData: FrqData, frqFile: File, sourceType?: FrqFileEntry['sourceType']) => void;
     resetFrqData: (id: string) => void;
@@ -76,13 +81,16 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
         setActiveFileId(id);
     };
 
-    const updateFrqData = (id: string, newFrqData: FrqData) => {
+    const updateFrqData = (id: string, newFrqData: FrqData, options?: UpdateFrqOptions) => {
         setFiles((prev) =>
             prev.map(f => {
                 if (f.id === id) {
+                    const shouldPushHistory = options?.pushHistory !== false;
                     return {
                         ...f,
-                        history: [...f.history, f.frqData],
+                        history: shouldPushHistory
+                            ? [...f.history, options?.historyBase ?? f.frqData]
+                            : f.history,
                         redoStack: [],
                         frqData: newFrqData,
                         isModified: true

@@ -259,8 +259,10 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
 
     const handleDownloadAll = async () => {
         if (files.length === 0) return;
+        const exportableFiles = files.filter(entry => entry.frqData.frames.length > 0);
+        if (exportableFiles.length === 0) return;
         const zip = new JSZip();
-        for (const entry of files) {
+        for (const entry of exportableFiles) {
             const newBuffer = writeFrq(entry.frqData);
             zip.file(normalizeFrqPath(entry.path, entry.name), newBuffer);
         }
@@ -277,6 +279,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
 
     const modifiedCount = files.filter(f => f.isModified).length;
     const wavCount = files.filter(f => f.wavFile).length;
+    const exportableCount = files.filter(f => f.frqData.frames.length > 0).length;
 
     return (
         <div style={{ display: 'flex', gap: '6px', padding: '8px 12px', borderBottom: '1px solid #ccc', background: '#f8f9fa', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -353,7 +356,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             </button>
 
             {/* Download */}
-            <button onClick={handleDownloadAll} disabled={files.length === 0} style={btnStyle('#198754', files.length === 0)}>
+            <button onClick={handleDownloadAll} disabled={exportableCount === 0} style={btnStyle('#198754', exportableCount === 0)}>
                 ⬇ 전체 내보내기 (.zip)
             </button>
 

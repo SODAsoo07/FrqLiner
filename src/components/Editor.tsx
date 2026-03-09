@@ -12,6 +12,12 @@ const MAX_FREQ = 700; // Hz — narrows Y range for more precise editing
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const NATURAL_NOTES = new Set([0, 2, 4, 5, 7, 9, 11]);
+type SpectrogramQuality = 'low' | 'default' | 'high';
+const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSize: number; melBands: number; gain: number }> = {
+    low: { bufferSize: 512, hopSize: 512, melBands: 24, gain: 72 },
+    default: { bufferSize: 1024, hopSize: 512, melBands: 36, gain: 62 },
+    high: { bufferSize: 2048, hopSize: 256, melBands: 48, gain: 56 },
+};
 
 const canvasY = (f0: number, h: number) => {
     if (f0 <= 0) return h;
@@ -20,6 +26,9 @@ const canvasY = (f0: number, h: number) => {
 
 const f0FromY = (y: number, h: number) =>
     Math.max(0, MIN_FREQ + ((h - y) / h) * (MAX_FREQ - MIN_FREQ));
+
+const freqToMel = (freq: number) => 2595 * Math.log10(1 + freq / 700);
+const melToFreq = (mel: number) => 700 * (Math.pow(10, mel / 2595) - 1);
 
 const formatPitch = (f0: number) => {
     if (!Number.isFinite(f0) || f0 <= 0) return null;
@@ -52,7 +61,6 @@ const Editor = () => {
     const waveCanvasRef = useRef<HTMLCanvasElement>(null);
     const waveContainerRef = useRef<HTMLDivElement>(null);
     const spgCanvasRef = useRef<HTMLCanvasElement>(null);
-    const spgContainerRef = useRef<HTMLDivElement>(null);
 
     // ── View state ─────────────────────────────
     const [zoomX, setZoomX] = useState(1);
@@ -62,6 +70,8 @@ const Editor = () => {
     const isDrawing = useRef(false);
     const isRightDrag = useRef(false); // true = erasing
     const lastDrawPos = useRef<{ x: number; y: number } | null>(null);
+    const dragStartFrqRef = useRef<import('../lib/frq').FrqData | null>(null);
+    const dragDraftFrqRef = useRef<import('../lib/frq').FrqData | null>(null);
 
     // ── Audio state ────────────────────────────
     const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -70,10 +80,16 @@ const Editor = () => {
     const [currentTime, setCurrentTime] = useState(0);
     const animFrameRef = useRef<number | null>(null);
     const [hoverPitch, setHoverPitch] = useState<number | null>(null);
+    const [globalSpectrogramQuality, setGlobalSpectrogramQuality] = useState<SpectrogramQuality>('low');
+    const [fileSpectrogramQualities, setFileSpectrogramQualities] = useState<Record<string, SpectrogramQuality>>({});
 
     // Storing decoded audio as STATE so renders are triggered
     const [waveformData, setWaveformData] = useState<Float32Array | null>(null);
+    const [waveformSampleRate, setWaveformSampleRate] = useState<number | null>(null);
     const [spectrogramData, setSpectrogramData] = useState<Uint8Array[] | null>(null);
+    const activeSpectrogramQuality = activeFile
+        ? (fileSpectrogramQualities[activeFile.id] ?? globalSpectrogramQuality)
+        : globalSpectrogramQuality;
 
     // ── Reset on file change ───────────────────
     useEffect(() => {
@@ -82,8 +98,11 @@ const Editor = () => {
         setCurrentTime(0);
         setIsPlaying(false);
         setWaveformData(null);
+        setWaveformSampleRate(null);
         setSpectrogramData(null);
         setHoverPitch(null);
+        dragStartFrqRef.current = null;
+        dragDraftFrqRef.current = null;
 
         if (audioRef.current) {
             audioRef.current.pause();
@@ -109,43 +128,87 @@ const Editor = () => {
                     const decoded = await audioCtxRef.current.decodeAudioData(rawBuffer);
 
                     // Store waveform PCM as STATE so render is triggered
-                    setWaveformData(decoded.getChannelData(0));
-
-                    // Spectrogram via Meyda (runs on JS main thread; 44100Hz * 5s = ~220k samples)
-                    const pcm = decoded.getChannelData(0);
-                    const BUFSZ = 1024;
-                    const HOP = BUFSZ / 2;
-                    const bands: Uint8Array[] = [];
-
-                    for (let i = 0; i < pcm.length; i += HOP) {
-                        let slice: Float32Array;
-                        if (i + BUFSZ <= pcm.length) {
-                            slice = pcm.subarray(i, i + BUFSZ);
-                        } else {
-                            // pad last slice
-                            slice = new Float32Array(BUFSZ);
-                            slice.set(pcm.subarray(i));
-                        }
-
-                        const result = Meyda.extract('melBands', slice) as number[] | null;
-                        if (!result) continue;
-
-                        const row = new Uint8Array(result.length);
-                        for (let k = 0; k < result.length; k++) {
-                            // log scale for visibility
-                            row[k] = Math.min(255, Math.log1p(result[k]) * 60);
-                        }
-                        bands.push(row);
-                    }
-
-                    setSpectrogramData(bands);
+                    setWaveformData(new Float32Array(decoded.getChannelData(0)));
+                    setWaveformSampleRate(decoded.sampleRate);
                 } catch (err) {
-                    console.error('Audio decode/analyze failed:', err);
+                    console.error('Audio decode failed:', err);
                 }
             }).catch(err => console.error('File read failed:', err));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeFileId]);
+
+    useEffect(() => {
+        setFileSpectrogramQualities(prev => {
+            const validIds = new Set(files.map(file => file.id));
+            const next = Object.fromEntries(
+                Object.entries(prev).filter(([id]) => validIds.has(id)),
+            ) as Record<string, SpectrogramQuality>;
+            return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+        });
+    }, [files]);
+
+    useEffect(() => {
+        if (!waveformData || !waveformSampleRate || !activeFile?.wavFile) {
+            setSpectrogramData(null);
+            return;
+        }
+
+        let cancelled = false;
+        setSpectrogramData(null);
+
+        const config = SPECTROGRAM_CONFIG[activeSpectrogramQuality];
+        const previousConfig = {
+            bufferSize: Meyda.bufferSize,
+            sampleRate: Meyda.sampleRate,
+            melBands: Meyda.melBands,
+        };
+
+        const buildSpectrogram = async () => {
+            try {
+                Meyda.bufferSize = config.bufferSize;
+                Meyda.sampleRate = waveformSampleRate;
+                Meyda.melBands = config.melBands;
+
+                const bands: Uint8Array[] = [];
+                for (let i = 0; i < waveformData.length; i += config.hopSize) {
+                    if (cancelled) return;
+
+                    let slice: Float32Array;
+                    if (i + config.bufferSize <= waveformData.length) {
+                        slice = waveformData.subarray(i, i + config.bufferSize);
+                    } else {
+                        slice = new Float32Array(config.bufferSize);
+                        slice.set(waveformData.subarray(i));
+                    }
+
+                    const result = Meyda.extract('melBands', slice) as number[] | null;
+                    if (!result) continue;
+
+                    const row = new Uint8Array(result.length);
+                    for (let k = 0; k < result.length; k++) {
+                        row[k] = Math.min(255, Math.log1p(result[k]) * config.gain);
+                    }
+                    bands.push(row);
+
+                    if (bands.length % 120 === 0) {
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                    }
+                }
+
+                if (!cancelled) setSpectrogramData(bands);
+            } catch (err) {
+                if (!cancelled) console.error('Spectrogram analyze failed:', err);
+            } finally {
+                Meyda.bufferSize = previousConfig.bufferSize;
+                Meyda.sampleRate = previousConfig.sampleRate;
+                Meyda.melBands = previousConfig.melBands;
+            }
+        };
+
+        buildSpectrogram();
+        return () => { cancelled = true; };
+    }, [activeFile?.id, activeFile?.wavFile, activeSpectrogramQuality, waveformData, waveformSampleRate]);
 
     // ── Keyboard shortcuts ─────────────────────
     useEffect(() => {
@@ -356,7 +419,7 @@ const Editor = () => {
     // ── Spectrogram draw ───────────────────────
     const drawSpectrogram = useCallback(() => {
         const canvas = spgCanvasRef.current;
-        const container = spgContainerRef.current;
+        const container = frqContainerRef.current;
         if (!canvas || !container) return;
 
         const W = container.clientWidth;
@@ -366,8 +429,10 @@ const Editor = () => {
 
         const ctx = canvas.getContext('2d')!;
         ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = '#787878';
+        ctx.fillRect(0, 0, W, H);
 
-        if (!spectrogramData || !activeFile || spectrogramData.length === 0) return;
+        if (!spectrogramData || !activeFile || spectrogramData.length === 0 || !waveformSampleRate) return;
 
         const frames = activeFile.frqData.frames;
         const ptW = Math.max(1, (W / frames.length) * zoomX);
@@ -376,7 +441,7 @@ const Editor = () => {
         const totalSlices = spectrogramData.length;
         const slicesPerFrame = totalSlices / frames.length;
         const bins = spectrogramData[0].length;
-        const binH = H / bins;
+        const maxMel = freqToMel(waveformSampleRate / 2);
 
         for (let i = startF; i <= endF; i++) {
             const cx = i * ptW - offsetX;
@@ -387,11 +452,17 @@ const Editor = () => {
             for (let b = 0; b < bins; b++) {
                 const v = row[b];
                 if (v < 8) continue;
+                const bandLowFreq = melToFreq((b / bins) * maxMel);
+                const bandHighFreq = melToFreq(((b + 1) / bins) * maxMel);
+                if (bandHighFreq < MIN_FREQ || bandLowFreq > MAX_FREQ) continue;
+
+                const yTop = canvasY(Math.min(MAX_FREQ, bandHighFreq), H);
+                const yBottom = canvasY(Math.max(MIN_FREQ, bandLowFreq), H);
                 const r = Math.min(255, v * 2.5);
                 const g = Math.min(255, Math.max(0, v * 2 - 80));
                 const bl = Math.min(255, Math.max(0, v * 2 - 180));
-                ctx.fillStyle = `rgb(${r},${g},${bl})`;
-                ctx.fillRect(cx, H - (b + 1) * binH, ptW + 0.5, binH + 0.5);
+                ctx.fillStyle = `rgba(${r},${g},${bl},0.82)`;
+                ctx.fillRect(cx, yTop, ptW + 0.5, Math.max(1, yBottom - yTop));
             }
         }
 
@@ -406,7 +477,7 @@ const Editor = () => {
             ctx.moveTo(px, 0); ctx.lineTo(px, H);
             ctx.stroke();
         }
-    }, [activeFile, zoomX, offsetX, currentTime, spectrogramData]);
+    }, [activeFile, zoomX, offsetX, currentTime, spectrogramData, waveformSampleRate]);
 
     useEffect(() => { drawSpectrogram(); }, [drawSpectrogram]);
 
@@ -476,6 +547,19 @@ const Editor = () => {
         }
     };
 
+    const finishDrawingSession = () => {
+        if (activeFile && dragStartFrqRef.current && dragDraftFrqRef.current) {
+            updateFrqData(activeFile.id, dragDraftFrqRef.current, {
+                historyBase: dragStartFrqRef.current,
+            });
+        }
+        isDrawing.current = false;
+        isRightDrag.current = false;
+        lastDrawPos.current = null;
+        dragStartFrqRef.current = null;
+        dragDraftFrqRef.current = null;
+    };
+
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!activeFile) return;
         if (e.button !== 0 && e.button !== 2) return;
@@ -485,6 +569,7 @@ const Editor = () => {
         if (idx >= 0 && idx < activeFile.frqData.frames.length) {
             // Deep copy so history entries are not mutated by subsequent edits
             const newFrames = activeFile.frqData.frames.map(f => ({ ...f }));
+            dragStartFrqRef.current = activeFile.frqData;
             if (isRightDrag.current) {
                 // Capture the pointer so erase continues even if mouse leaves canvas
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -498,7 +583,9 @@ const Editor = () => {
                 newFrames[idx].f0 = f0;
                 lastDrawPos.current = { x: idx, y: f0 };
             }
-            updateFrqData(activeFile.id, { ...activeFile.frqData, frames: newFrames });
+            const draftFrqData = { ...activeFile.frqData, frames: newFrames };
+            dragDraftFrqRef.current = draftFrqData;
+            updateFrqData(activeFile.id, draftFrqData, { pushHistory: false });
         }
     };
 
@@ -513,7 +600,10 @@ const Editor = () => {
         // Check if the right or left button is still held
         const leftHeld = (e.buttons & 1) !== 0;
         const rightHeld = (e.buttons & 2) !== 0;
-        if (!leftHeld && !rightHeld) { isDrawing.current = false; return; }
+        if (!leftHeld && !rightHeld) {
+            finishDrawingSession();
+            return;
+        }
         const erasing = isRightDrag.current;
         const idx = getFrame(e.clientX);
         if (idx >= 0 && idx < activeFile.frqData.frames.length) {
@@ -533,15 +623,17 @@ const Editor = () => {
                 interpolate(lastDrawPos.current.x, lastDrawPos.current.y, idx, f0, newFrames);
                 lastDrawPos.current = { x: idx, y: f0 };
             }
-            updateFrqData(activeFile.id, { ...activeFile.frqData, frames: newFrames });
+            const draftFrqData = { ...activeFile.frqData, frames: newFrames };
+            dragDraftFrqRef.current = draftFrqData;
+            updateFrqData(activeFile.id, draftFrqData, { pushHistory: false });
         }
     };
 
-    const onPointerUp = () => { isDrawing.current = false; isRightDrag.current = false; lastDrawPos.current = null; };
+    const onPointerUp = () => { finishDrawingSession(); };
     // Only stop left-click drawing on leave; right-click erase is handled by pointer capture
     const onPointerLeave = () => {
         setHoverPitch(null);
-        if (!isRightDrag.current) { isDrawing.current = false; lastDrawPos.current = null; }
+        if (!isRightDrag.current) finishDrawingSession();
     };
 
     const onWheel = (e: React.WheelEvent) => {
@@ -619,6 +711,51 @@ const Editor = () => {
                         WAV 미연결
                     </span>
                 )}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
+                    Global
+                    <select
+                        value={globalSpectrogramQuality}
+                        onChange={e => {
+                            const nextQuality = e.target.value as SpectrogramQuality;
+                            setGlobalSpectrogramQuality(nextQuality);
+                            setFileSpectrogramQualities({});
+                        }}
+                        style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
+                    >
+                        <option value="low">Low</option>
+                        <option value="default">Default</option>
+                        <option value="high">High</option>
+                    </select>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
+                    This file
+                    <select
+                        value={activeFile ? (fileSpectrogramQualities[activeFile.id] ?? '__global__') : '__global__'}
+                        onChange={e => {
+                            if (!activeFile) return;
+                            const nextValue = e.target.value;
+                            setFileSpectrogramQualities(prev => {
+                                if (nextValue === '__global__') {
+                                    const next = { ...prev };
+                                    delete next[activeFile.id];
+                                    return next;
+                                }
+                                return { ...prev, [activeFile.id]: nextValue as SpectrogramQuality };
+                            });
+                        }}
+                        style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
+                    >
+                        <option value="__global__">Use Global</option>
+                        <option value="low">Low</option>
+                        <option value="default">Default</option>
+                        <option value="high">High</option>
+                    </select>
+                </label>
+                {activeFile.wavFile && !spectrogramData && (
+                    <span style={{ fontSize: '11px', color: '#8a6d3b', background: '#fff3cd', padding: '1px 6px', borderRadius: 3 }}>
+                        Loading spectrogram...
+                    </span>
+                )}
                 <div style={{ flex: 1 }} />
                 <button
                     onClick={() => {
@@ -656,7 +793,7 @@ const Editor = () => {
             {/* ─── Waveform overview panel ─────────────── */}
             <div
                 ref={waveContainerRef}
-                style={{ order: 3, flexShrink: 0, height: '65px', position: 'relative', overflow: 'hidden', background: '#f0f4ff', borderTop: '1px solid #d0d9f0' }}
+                style={{ flexShrink: 0, height: '65px', position: 'relative', overflow: 'hidden', background: '#f0f4ff', borderTop: '1px solid #d0d9f0' }}
             >
                 {waveformData
                     ? <canvas ref={waveCanvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
@@ -671,27 +808,40 @@ const Editor = () => {
             {/* ─── FRQ editor canvas (fills remaining space) ── */}
             <div
                 ref={frqContainerRef}
-                style={{ order: 2, flex: 1, position: 'relative', overflow: 'hidden', cursor: 'crosshair', minHeight: 0 }}
+                style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: 'crosshair', minHeight: 0, background: activeFile.wavFile ? '#787878' : '#fff' }}
                 onWheel={onWheel}
             >
                 <canvas
+                    ref={spgCanvasRef}
+                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }}
+                />
+                {!activeFile.wavFile && (
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontSize: 12, pointerEvents: 'none' }}>
+                        WAV 甯護攵・・・壱洳・､・ｴ ・・・､寬呰敢・懋ｷｸ・ｨ・ｴ 岺懍亨・ｩ・壱共
+                    </div>
+                )}
+                <canvas
                     ref={frqCanvasRef}
-                    style={{ width: '100%', height: '100%', display: 'block' }}
+                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }}
                     onPointerDown={onPointerDown}
                     onPointerMove={onPointerMove}
                     onPointerUp={onPointerUp}
                     onPointerLeave={onPointerLeave}
                     onContextMenu={e => e.preventDefault()}  // prevent right-click menu
                 />
+                {activeFile.wavFile && !spectrogramData && (
+                    <div style={{ position: 'absolute', right: 12, top: 12, fontSize: 11, color: '#f1f3f5', background: 'rgba(0,0,0,0.35)', padding: '4px 8px', borderRadius: 4, pointerEvents: 'none' }}>
+                        Loading spectrogram...
+                    </div>
+                )}
             </div>
 
             {/* ─── Spectrogram ────────────────────────────── */}
             <div
-                ref={spgContainerRef}
-                style={{ order: 1, flexShrink: 0, height: '130px', position: 'relative', overflow: 'hidden', background: '#111', borderBottom: '1px solid #2b2b2b' }}
+                style={{ display: 'none' }}
                 onWheel={onWheel}
             >
-                <canvas ref={spgCanvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+                <canvas style={{ width: '100%', height: '100%', display: 'block' }} />
                 {!activeFile.wavFile && (
                     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', fontSize: 12 }}>
                         WAV 파일을 불러오면 멜 스펙트로그램이 표시됩니다
