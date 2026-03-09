@@ -8,7 +8,7 @@ import { autoCorrectFrq } from '../lib/frqAutoCorrect';
 // Helpers
 // ──────────────────────────────────────────────
 const MIN_FREQ = 50;
-const MAX_FREQ = 700; // Hz — narrows Y range for more precise editing
+const VISUAL_MAX_FREQ = 2400;
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const NATURAL_NOTES = new Set([0, 2, 4, 5, 7, 9, 11]);
@@ -19,13 +19,21 @@ const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSi
     high: { bufferSize: 4096, hopSize: 128, visibleBins: 192, gain: 36 },
 };
 
+const LOG_MIN_FREQ = Math.log(MIN_FREQ);
+const LOG_VISUAL_MAX_FREQ = Math.log(VISUAL_MAX_FREQ);
+const LOG_VISUAL_FREQ_RANGE = LOG_VISUAL_MAX_FREQ - LOG_MIN_FREQ;
+
 const canvasY = (f0: number, h: number) => {
     if (f0 <= 0) return h;
-    return Math.max(0, Math.min(h - ((f0 - MIN_FREQ) / (MAX_FREQ - MIN_FREQ)) * h, h));
+    const clamped = Math.max(MIN_FREQ, Math.min(VISUAL_MAX_FREQ, f0));
+    const normalized = (Math.log(clamped) - LOG_MIN_FREQ) / LOG_VISUAL_FREQ_RANGE;
+    return Math.max(0, Math.min(h - normalized * h, h));
 };
 
-const f0FromY = (y: number, h: number) =>
-    Math.max(0, MIN_FREQ + ((h - y) / h) * (MAX_FREQ - MIN_FREQ));
+const f0FromY = (y: number, h: number) => {
+    const normalized = Math.max(0, Math.min(1, (h - y) / h));
+    return Math.exp(LOG_MIN_FREQ + normalized * LOG_VISUAL_FREQ_RANGE);
+};
 
 const remapSpectrumRowToVisibleBins = (
     row: Float32Array | number[],
@@ -40,7 +48,7 @@ const remapSpectrumRowToVisibleBins = (
 
     for (let i = 0; i < visibleBins; i++) {
         const ratio = i / Math.max(1, visibleBins - 1);
-        const freq = MIN_FREQ * Math.pow(MAX_FREQ / MIN_FREQ, ratio);
+        const freq = MIN_FREQ * Math.pow(VISUAL_MAX_FREQ / MIN_FREQ, ratio);
         const sourceIndex = Math.min(
             maxIndex,
             Math.max(0, (freq / nyquist) * (bufferSize / 2)),
@@ -310,7 +318,7 @@ const Editor = () => {
         ctx.strokeStyle = 'rgba(200,200,200,0.4)';
         ctx.lineWidth = 0.5;
         ctx.beginPath();
-        for (let f = Math.ceil(MIN_FREQ / 100) * 100; f <= MAX_FREQ; f += 100) {
+        for (let f = Math.ceil(MIN_FREQ / 100) * 100; f <= VISUAL_MAX_FREQ; f += 100) {
             const y = canvasY(f, H);
             ctx.moveTo(0, y); ctx.lineTo(W, y);
         }
@@ -392,7 +400,7 @@ const Editor = () => {
         ctx.font = '10px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
         for (let midi = 24; midi <= 108; midi++) {
             const hz = 440 * Math.pow(2, (midi - 69) / 12);
-            if (hz > MAX_FREQ) break;
+            if (hz > VISUAL_MAX_FREQ) break;
             const y = canvasY(hz, H);
             if (y < 0 || y > H) continue;
 
