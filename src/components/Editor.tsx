@@ -13,10 +13,10 @@ const MAX_FREQ = 700; // Hz — narrows Y range for more precise editing
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const NATURAL_NOTES = new Set([0, 2, 4, 5, 7, 9, 11]);
 type SpectrogramQuality = 'low' | 'default' | 'high';
-const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSize: number; melBands: number; visibleBins: number; gain: number }> = {
-    low: { bufferSize: 512, hopSize: 512, melBands: 24, visibleBins: 36, gain: 72 },
-    default: { bufferSize: 1024, hopSize: 512, melBands: 40, visibleBins: 60, gain: 62 },
-    high: { bufferSize: 2048, hopSize: 256, melBands: 64, visibleBins: 96, gain: 56 },
+const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSize: number; visibleBins: number; gain: number }> = {
+    low: { bufferSize: 1024, hopSize: 512, visibleBins: 72, gain: 28 },
+    default: { bufferSize: 2048, hopSize: 256, visibleBins: 120, gain: 32 },
+    high: { bufferSize: 4096, hopSize: 128, visibleBins: 192, gain: 36 },
 };
 
 const canvasY = (f0: number, h: number) => {
@@ -27,29 +27,31 @@ const canvasY = (f0: number, h: number) => {
 const f0FromY = (y: number, h: number) =>
     Math.max(0, MIN_FREQ + ((h - y) / h) * (MAX_FREQ - MIN_FREQ));
 
-const freqToMel = (freq: number) => 2595 * Math.log10(1 + freq / 700);
-
-const remapMelRowToVisibleBins = (
-    row: number[],
+const remapSpectrumRowToVisibleBins = (
+    row: Float32Array | number[],
     visibleBins: number,
     sampleRate: number,
+    bufferSize: number,
     gain: number,
 ) => {
     const remapped = new Uint8Array(visibleBins);
-    const maxMel = freqToMel(sampleRate / 2);
     const maxIndex = Math.max(1, row.length - 1);
+    const nyquist = sampleRate / 2;
 
     for (let i = 0; i < visibleBins; i++) {
-        const freq = MIN_FREQ + (i / Math.max(1, visibleBins - 1)) * (MAX_FREQ - MIN_FREQ);
-        const mel = freqToMel(freq);
-        const sourceIndex = Math.min(maxIndex, (mel / maxMel) * maxIndex);
+        const ratio = i / Math.max(1, visibleBins - 1);
+        const freq = MIN_FREQ * Math.pow(MAX_FREQ / MIN_FREQ, ratio);
+        const sourceIndex = Math.min(
+            maxIndex,
+            Math.max(0, (freq / nyquist) * (bufferSize / 2)),
+        );
         const leftIndex = Math.floor(sourceIndex);
         const rightIndex = Math.min(maxIndex, leftIndex + 1);
         const blend = sourceIndex - leftIndex;
         const leftValue = row[leftIndex] ?? 0;
         const rightValue = row[rightIndex] ?? leftValue;
         const interpolated = leftValue + (rightValue - leftValue) * blend;
-        remapped[i] = Math.min(255, Math.log1p(interpolated) * gain);
+        remapped[i] = Math.min(255, Math.max(0, Math.log10(1 + interpolated * gain) * 105));
     }
 
     return remapped;
@@ -186,14 +188,12 @@ const Editor = () => {
         const previousConfig = {
             bufferSize: Meyda.bufferSize,
             sampleRate: Meyda.sampleRate,
-            melBands: Meyda.melBands,
         };
 
         const buildSpectrogram = async () => {
             try {
                 Meyda.bufferSize = config.bufferSize;
                 Meyda.sampleRate = waveformSampleRate;
-                Meyda.melBands = config.melBands;
 
                 const bands: Uint8Array[] = [];
                 for (let i = 0; i < waveformData.length; i += config.hopSize) {
@@ -207,14 +207,15 @@ const Editor = () => {
                         slice.set(waveformData.subarray(i));
                     }
 
-                    const result = Meyda.extract('melBands', slice) as number[] | null;
+                    const result = Meyda.extract('amplitudeSpectrum', slice) as Float32Array | null;
                     if (!result) continue;
 
                     bands.push(
-                        remapMelRowToVisibleBins(
+                        remapSpectrumRowToVisibleBins(
                             result,
                             config.visibleBins,
                             waveformSampleRate,
+                            config.bufferSize,
                             config.gain,
                         ),
                     );
@@ -230,7 +231,6 @@ const Editor = () => {
             } finally {
                 Meyda.bufferSize = previousConfig.bufferSize;
                 Meyda.sampleRate = previousConfig.sampleRate;
-                Meyda.melBands = previousConfig.melBands;
             }
         };
 
@@ -473,17 +473,26 @@ const Editor = () => {
 
         for (let i = startF; i <= endF; i++) {
             const cx = i * ptW - offsetX;
-            const sIdx = Math.floor(i * slicesPerFrame);
-            if (sIdx < 0 || sIdx >= totalSlices) continue;
+            const sliceStart = Math.max(0, Math.floor(i * slicesPerFrame));
+            const sliceEnd = Math.min(totalSlices, Math.max(sliceStart + 1, Math.ceil((i + 1) * slicesPerFrame)));
+            if (sliceStart >= totalSlices) continue;
 
-            const row = spectrogramData[sIdx];
+            const row = new Uint8Array(bins);
+            for (let s = sliceStart; s < sliceEnd; s++) {
+                const sourceRow = spectrogramData[s];
+                for (let b = 0; b < bins; b++) {
+                    if (sourceRow[b] > row[b]) row[b] = sourceRow[b];
+                }
+            }
+
             for (let b = 0; b < bins; b++) {
                 const v = row[b];
-                if (v < 8) continue;
-                const r = Math.min(255, v * 2.5);
-                const g = Math.min(255, Math.max(0, v * 2 - 80));
-                const bl = Math.min(255, Math.max(0, v * 2 - 180));
-                ctx.fillStyle = `rgba(${r},${g},${bl},0.82)`;
+                if (v < 6) continue;
+                const r = Math.min(255, 40 + v * 1.35);
+                const g = Math.min(255, Math.max(0, 20 + v * 1.1));
+                const bl = Math.min(255, Math.max(0, 50 + v * 2.1));
+                const alpha = Math.min(0.96, 0.2 + v / 320);
+                ctx.fillStyle = `rgba(${r},${g},${bl},${alpha})`;
                 ctx.fillRect(cx, H - (b + 1) * binH, ptW + 0.5, binH + 0.5);
             }
         }
