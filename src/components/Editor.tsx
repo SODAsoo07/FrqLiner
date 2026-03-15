@@ -2,7 +2,12 @@ import { useRef, useEffect, useState, useCallback, type MouseEvent } from 'react
 import { useFrqContext } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import Meyda from 'meyda';
-import { sanitizeLlsmExperimentalSettings, type FrqFrame, type LlsmExperimentalSettings } from '../lib/frq';
+import {
+    sanitizeLlsmExperimentalSettingsForPatch,
+    type FrqFrame,
+    type LlsmExperimentalSettings,
+    type LlsmVoicingMode,
+} from '../lib/frq';
 import { autoCorrectFrq } from '../lib/frqAutoCorrect';
 
 // ──────────────────────────────────────────────
@@ -88,7 +93,7 @@ const formatPitch = (f0: number) => {
 // Component
 // ──────────────────────────────────────────────
 const Editor = () => {
-    const { files, activeFileId, updateFrqData, updateLlsmExperimental, resetFrqData, undo, redo } = useFrqContext();
+    const { files, activeFileId, updateFrqData, updateLlsmExperimental, updateLlsmVoicingMode, resetFrqData, undo, redo } = useFrqContext();
     const { t } = useLanguage();
     const activeFile = files.find(f => f.id === activeFileId);
 
@@ -699,31 +704,36 @@ const Editor = () => {
         }
     };
 
-    const updateExperimentalField = (field: '_9' | '_a' | '_b' | '_12', value: number) => {
+    const updateExperimentalField = (field: '_9' | '_a' | '_b', value: number) => {
         if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
         const current = activeFile.llsmExperimental;
+        const baseline = activeFile.originalLlsmExperimental ?? current;
         const next: LlsmExperimentalSettings = {
             ...current,
             [field]: value,
         };
-        const sanitized = sanitizeLlsmExperimentalSettings(next, current._13.length);
-        if (!sanitized) return;
+        const sanitized = sanitizeLlsmExperimentalSettingsForPatch(next, baseline);
+        if (!sanitized) {
+            window.alert(t('experimentalUnsafe'));
+            return;
+        }
         updateLlsmExperimental(activeFile.id, sanitized);
     };
 
     const applyExperimental13 = () => {
         if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
+        const baseline = activeFile.originalLlsmExperimental ?? activeFile.llsmExperimental;
         const parsed = llsm13Input
             .split(',')
             .map(v => Number(v.trim()))
             .filter(v => Number.isFinite(v));
-        const sanitized = sanitizeLlsmExperimentalSettings({
+        const sanitized = sanitizeLlsmExperimentalSettingsForPatch({
             ...activeFile.llsmExperimental,
             _13: parsed,
             _12: parsed.length + 1,
-        }, activeFile.llsmExperimental._13.length);
+        }, baseline);
         if (!sanitized) {
-            window.alert(t('experimentalInvalid13'));
+            window.alert(t('experimentalUnsafe'));
             setLlsm13Input(activeFile.llsmExperimental._13.map(v => Number(v.toFixed(6))).join(', '));
             return;
         }
@@ -749,6 +759,7 @@ const Editor = () => {
     const hoverPitchInfo = formatPitch(hoverPitch ?? 0);
     const isLlsmFile = activeFile.sourceType === 'llsm';
     const llsmExperimental = activeFile.llsmExperimental ?? null;
+    const llsmVoicingMode: LlsmVoicingMode = activeFile.llsmVoicingMode ?? 'preserve';
     if (isWavOnly) {
         return (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', color: '#888', background: '#fafafa' }}>
@@ -831,6 +842,23 @@ const Editor = () => {
                         {t('wavMissing')}
                     </span>
                 )}
+                {isLlsmFile && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#4c1d95', background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 4, padding: '1px 6px' }}>
+                        {t('voicingMode')}
+                        <select
+                            value={llsmVoicingMode}
+                            onChange={e => {
+                                if (!activeFile || activeFile.sourceType !== 'llsm') return;
+                                updateLlsmVoicingMode(activeFile.id, e.target.value as LlsmVoicingMode);
+                            }}
+                            style={{ fontSize: 11, padding: '1px 4px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff' }}
+                        >
+                            <option value="preserve">{t('voicingPreserve')}</option>
+                            <option value="edge-extend">{t('voicingEdgeExtend')}</option>
+                            <option value="full">{t('voicingFull')}</option>
+                        </select>
+                    </label>
+                )}
                 {(editorTab === 'pitch' || !isLlsmFile) && (
                     <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
                         <input
@@ -895,6 +923,22 @@ const Editor = () => {
                 {isLlsmFile && editorTab === 'experimental' && llsmExperimental && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '4px 8px', border: '1px solid #d8b4fe', borderRadius: 6, background: '#faf5ff', maxWidth: '100%' }}>
                         <span style={{ fontSize: 11, color: '#6b21a8', fontWeight: 700 }}>{t('experimentalWarning')}</span>
+                        <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            {t('voicingMode')}
+                            <select
+                                value={llsmVoicingMode}
+                                onChange={e => {
+                                    if (!activeFile || activeFile.sourceType !== 'llsm') return;
+                                    updateLlsmVoicingMode(activeFile.id, e.target.value as LlsmVoicingMode);
+                                }}
+                                style={{ fontSize: 11, padding: '1px 4px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff' }}
+                            >
+                                <option value="preserve">{t('voicingPreserve')}</option>
+                                <option value="edge-extend">{t('voicingEdgeExtend')}</option>
+                                <option value="full">{t('voicingFull')}</option>
+                            </select>
+                        </label>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('voicingModeDesc')}</span>
                         <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
                             `_9`
                             <input type="number" step="0.01" min="0.000001" value={llsmExperimental._9} onChange={e => {

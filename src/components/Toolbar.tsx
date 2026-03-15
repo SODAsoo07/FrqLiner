@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import JSZip from 'jszip';
-import { useFrqContext } from './FrqContext';
+import { useFrqContext, type FrqFileEntry } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import { extractExpectedF0 } from '../lib/pitch';
 import {
@@ -166,6 +166,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                             frqFileObj,
                             group.frq ? 'frq' : group.llsm ? 'llsm' : 'pmk',
                             group.llsm ? (group.llsmExperimental ?? null) : undefined,
+                            group.llsm ? 'preserve' : undefined,
                         );
                         keysToSkip.add(key);
                     } catch (err) {
@@ -175,7 +176,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             }
         }
 
-        const newEntries = [];
+        const newEntries: FrqFileEntry[] = [];
         for (const [baseName, group] of groups.entries()) {
             if (keysToSkip.has(baseName)) continue;
             const expectedF0 = extractExpectedF0(group.baseName || baseName);
@@ -218,6 +219,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         sourceType,
                         llsmExperimental: sourceType === 'llsm' ? (group.llsmExperimental ?? null) : undefined,
                         originalLlsmExperimental: sourceType === 'llsm' ? (group.llsmExperimental ?? null) : undefined,
+                        llsmVoicingMode: sourceType === 'llsm' ? 'preserve' : undefined,
                     });
                 } catch (err) {
                     console.error(`Failed to parse ${group.frq?.name || group.llsm?.name || baseName}`, err);
@@ -329,7 +331,10 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 const llsmName = /\.llsm$/i.test(entry.frqFile.name)
                     ? entry.frqFile.name
                     : `${entry.frqFile.name}.llsm`;
-                zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, entry.llsmExperimental));
+                zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, {
+                    experimentalSettings: entry.llsmExperimental,
+                    voicingMode: entry.llsmVoicingMode,
+                }));
             } else {
                 zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
             }

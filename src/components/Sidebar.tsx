@@ -33,7 +33,10 @@ const buildTree = (files: FrqFileEntry[]) => {
 
 const downloadEntry = async (entry: FrqFileEntry) => {
     const payload = entry.sourceType === 'llsm'
-        ? writeLlsm(await entry.frqFile.arrayBuffer(), entry.frqData, entry.llsmExperimental)
+        ? writeLlsm(await entry.frqFile.arrayBuffer(), entry.frqData, {
+            experimentalSettings: entry.llsmExperimental,
+            voicingMode: entry.llsmVoicingMode,
+        })
         : writeFrq(entry.frqData);
     const downloadName = entry.sourceType === 'llsm'
         ? (/\.(llsm)$/i.test(entry.frqFile.name) ? entry.frqFile.name : `${entry.name}.llsm`)

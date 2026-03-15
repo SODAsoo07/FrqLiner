@@ -34,6 +34,13 @@ export interface LlsmExperimentalSettings {
     _13: number[];
 }
 
+export type LlsmVoicingMode = 'preserve' | 'edge-extend' | 'full';
+
+interface WriteLlsmOptions {
+    experimentalSettings?: LlsmExperimentalSettings | null;
+    voicingMode?: LlsmVoicingMode;
+}
+
 interface LlsmObject {
     [key: string]: LlsmValue;
 }
@@ -467,6 +474,11 @@ const isStrictlyAscending = (values: number[]) => {
     return true;
 };
 
+const isWithinFactorRange = (value: number, reference: number, minFactor = 0.25, maxFactor = 4) => {
+    if (!(reference > 0)) return value > 0;
+    return value >= reference * minFactor && value <= reference * maxFactor;
+};
+
 export function sanitizeLlsmExperimentalSettings(
     candidate: Partial<LlsmExperimentalSettings>,
     existing13Length?: number,
@@ -489,6 +501,46 @@ export function sanitizeLlsmExperimentalSettings(
     return { _9, _a, _b, _12, _13 };
 }
 
+export function sanitizeLlsmExperimentalSettingsForPatch(
+    candidate: Partial<LlsmExperimentalSettings>,
+    baseline: LlsmExperimentalSettings,
+): LlsmExperimentalSettings | null {
+    const sanitized = sanitizeLlsmExperimentalSettings(candidate, baseline._13.length);
+    if (!sanitized) return null;
+
+    const upperBand = sanitized._13[sanitized._13.length - 1];
+    if (!(sanitized._a >= upperBand)) return null;
+    if (!(sanitized._b >= upperBand)) return null;
+    if (!(sanitized._b >= sanitized._a)) return null;
+    if (!(sanitized._9 >= sanitized._a)) return null;
+
+    if (!isWithinFactorRange(sanitized._9, baseline._9)) return null;
+    if (!isWithinFactorRange(sanitized._a, baseline._a)) return null;
+    if (!isWithinFactorRange(sanitized._b, baseline._b)) return null;
+
+    for (let i = 0; i < sanitized._13.length; i++) {
+        if (!isWithinFactorRange(sanitized._13[i], baseline._13[i])) return null;
+    }
+
+    return sanitized;
+}
+
+const extractLlsmExperimentalFromConfig = (configObj: Record<string, LlsmValue>): LlsmExperimentalSettings | null => {
+    const _9 = asNumber(configObj._9);
+    const _a = asNumber(configObj._a);
+    const _b = asNumber(configObj._b);
+    const _13 = asNumberArray(configObj._13);
+    if (_9 == null || _a == null || _b == null || _13.length === 0) return null;
+
+    return sanitizeLlsmExperimentalSettings({
+        _9,
+        _a,
+        _b,
+        _12: asNumber(configObj._12) ?? (_13.length + 1),
+        _13,
+    }, _13.length);
+};
+
 export function readLlsmExperimentalSettings(buffer: ArrayBuffer): LlsmExperimentalSettings | null {
     const bytes = new Uint8Array(buffer);
     const dv = new DataView(buffer);
@@ -507,19 +559,7 @@ export function readLlsmExperimentalSettings(buffer: ArrayBuffer): LlsmExperimen
     const configObj = asRecord(dataObj._35);
     if (!configObj) return null;
 
-    const _9 = asNumber(configObj._9);
-    const _a = asNumber(configObj._a);
-    const _b = asNumber(configObj._b);
-    const _13 = asNumberArray(configObj._13);
-    if (_9 == null || _a == null || _b == null || _13.length === 0) return null;
-
-    return sanitizeLlsmExperimentalSettings({
-        _9,
-        _a,
-        _b,
-        _12: asNumber(configObj._12) ?? (_13.length + 1),
-        _13,
-    }, _13.length);
+    return extractLlsmExperimentalFromConfig(configObj);
 }
 
 export function parseLlsm(buffer: ArrayBuffer): FrqData {
@@ -573,8 +613,10 @@ export function parseLlsm(buffer: ArrayBuffer): FrqData {
 export function writeLlsm(
     baseBuffer: ArrayBuffer,
     data: FrqData,
-    experimentalSettings?: LlsmExperimentalSettings | null,
+    options?: WriteLlsmOptions,
 ): ArrayBuffer {
+    const experimentalSettings = options?.experimentalSettings ?? null;
+    const voicingMode: LlsmVoicingMode = options?.voicingMode ?? 'preserve';
     const output = baseBuffer.slice(0);
     const bytes = new Uint8Array(output);
     const dv = new DataView(output);
@@ -593,11 +635,13 @@ export function writeLlsm(
     const rootObj = asRecord(rootNode.value);
     if (!rootObj) throw new Error('Invalid LLSM file: root object missing');
     const dataObj = rootKey === 'data' ? rootObj : asRecord(rootObj.data) || rootObj;
+    const configObj = asRecord(dataObj._35);
+    const baselineExperimental = configObj ? extractLlsmExperimentalFromConfig(configObj) : null;
     const frameOffsets = asNumberArray(dataObj._3a).map(v => Math.trunc(v));
     const frameCount = Math.min(frameOffsets.length, data.frames.length);
 
     if (experimentalSettings) {
-        const configPrefix = `${rootKey}._35`;
+        const configPrefix = index[`${rootKey}._35`] ? `${rootKey}._35` : `${rootKey}.data._35`;
         const node9 = index[`${configPrefix}._9`];
         const nodeA = index[`${configPrefix}._a`];
         const nodeB = index[`${configPrefix}._b`];
@@ -613,7 +657,9 @@ export function writeLlsm(
             typeof node13.length === 'number' && node13.length > 0;
 
         if (canPatchHeaders) {
-            const sanitized = sanitizeLlsmExperimentalSettings(experimentalSettings, node13.length);
+            const sanitized = baselineExperimental
+                ? sanitizeLlsmExperimentalSettingsForPatch(experimentalSettings, baselineExperimental)
+                : sanitizeLlsmExperimentalSettings(experimentalSettings, node13.length);
             if (sanitized) {
                 dv.setFloat32(node9.valueOffset!, sanitized._9, true);
                 dv.setFloat32(nodeA.valueOffset!, sanitized._a, true);
@@ -632,33 +678,53 @@ export function writeLlsm(
         }
     }
 
+    const frameMeta: Array<{ pitchOffset: number; originalPitch: number }> = new Array(frameCount);
     for (let i = 0; i < frameCount; i++) {
         const start = frameOffsets[i];
-        if (start < 0 || start >= dv.byteLength) continue;
+        if (start < 0 || start >= dv.byteLength) {
+            frameMeta[i] = { pitchOffset: -1, originalPitch: 0 };
+            continue;
+        }
         try {
             const meta = readFramePitch(dv, bytes, start);
-            if (meta.pitchOffset < 0 || meta.pitchOffset + 4 > dv.byteLength) continue;
-            const originalVoiced = meta.pitchHz > 1;
-            const nextPitch = data.frames[i]?.f0;
-            let safePitch = 0;
-
-            // Safety: keep originally-unvoiced frames unvoiced.
-            // In libllsm2 synthesis, setting voiced F0 on frames without voiced structures
-            // can make the whole chunk fail integrity checks and result in silence.
-            if (originalVoiced) {
-                if (!Number.isFinite(nextPitch)) {
-                    safePitch = meta.pitchHz;
-                } else if ((nextPitch as number) > 1) {
-                    safePitch = nextPitch as number;
-                } else {
-                    safePitch = 0;
-                }
-            }
-
-            dv.setFloat32(meta.pitchOffset, safePitch, true);
+            frameMeta[i] = { pitchOffset: meta.pitchOffset, originalPitch: meta.pitchHz };
         } catch {
-            // Skip malformed frame and continue patching others
+            frameMeta[i] = { pitchOffset: -1, originalPitch: 0 };
         }
+    }
+
+    const originalVoicedFlags = frameMeta.map(meta => meta.originalPitch > 1);
+    const canPromoteVoicing = (idx: number) => {
+        if (voicingMode === 'full') return true;
+        if (voicingMode !== 'edge-extend') return false;
+        const left = idx > 0 && originalVoicedFlags[idx - 1];
+        const right = idx + 1 < originalVoicedFlags.length && originalVoicedFlags[idx + 1];
+        return left || right;
+    };
+
+    for (let i = 0; i < frameCount; i++) {
+        const meta = frameMeta[i];
+        if (meta.pitchOffset < 0 || meta.pitchOffset + 4 > dv.byteLength) continue;
+
+        const originalVoiced = meta.originalPitch > 1;
+        const nextPitch = data.frames[i]?.f0;
+        let safePitch = 0;
+
+        if (originalVoiced) {
+            if (!Number.isFinite(nextPitch)) {
+                safePitch = meta.originalPitch;
+            } else if ((nextPitch as number) > 1) {
+                safePitch = nextPitch as number;
+            } else {
+                safePitch = 0;
+            }
+        } else if (Number.isFinite(nextPitch) && (nextPitch as number) > 1 && canPromoteVoicing(i)) {
+            // Safety mode "edge-extend":
+            // allow unvoiced->voiced only adjacent to originally voiced frames.
+            safePitch = nextPitch as number;
+        }
+
+        dv.setFloat32(meta.pitchOffset, safePitch, true);
     }
 
     return output;
