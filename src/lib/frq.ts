@@ -426,8 +426,23 @@ export function writeLlsm(baseBuffer: ArrayBuffer, data: FrqData): ArrayBuffer {
         try {
             const meta = readFramePitch(dv, bytes, start);
             if (meta.pitchOffset < 0 || meta.pitchOffset + 4 > dv.byteLength) continue;
-            const nextPitch = data.frames[i]?.f0 ?? 0;
-            const safePitch = Number.isFinite(nextPitch) && nextPitch > 1 ? nextPitch : 0;
+            const originalVoiced = meta.pitchHz > 1;
+            const nextPitch = data.frames[i]?.f0;
+            let safePitch = 0;
+
+            // Safety: keep originally-unvoiced frames unvoiced.
+            // In libllsm2 synthesis, setting voiced F0 on frames without voiced structures
+            // can make the whole chunk fail integrity checks and result in silence.
+            if (originalVoiced) {
+                if (!Number.isFinite(nextPitch)) {
+                    safePitch = meta.pitchHz;
+                } else if ((nextPitch as number) > 1) {
+                    safePitch = nextPitch as number;
+                } else {
+                    safePitch = 0;
+                }
+            }
+
             dv.setFloat32(meta.pitchOffset, safePitch, true);
         } catch {
             // Skip malformed frame and continue patching others
