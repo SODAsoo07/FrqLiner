@@ -1,16 +1,27 @@
 name: Build Frqliner
 
 on:
+  workflow_dispatch:
+    inputs:
+      build_windows:
+        description: Build Windows installer
+        required: true
+        default: true
+        type: boolean
+      build_macos:
+        description: Build macOS installer
+        required: true
+        default: true
+        type: boolean
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - "v*"
 
 jobs:
-  # ── Windows build ────────────────────────────────────────────────
   build-windows:
     name: Windows (x64)
     runs-on: windows-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.build_windows
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,29 +29,28 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
+          cache: "npm"
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Vite app
-        run: npm run build
-        env:
-          ELECTRON_BUILD: 'true'
-
       - name: Build Electron (Windows)
-        run: npx electron-builder --win --publish never
+        env:
+          ELECTRON_BUILD: "true"
+        run: npm run electron:build:win -- --publish never
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: frqliner-windows
-          path: release/*.exe
+          path: release/**
+          if-no-files-found: error
 
-  # ── macOS build ──────────────────────────────────────────────────
   build-macos:
     name: macOS (x64 + arm64)
     runs-on: macos-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.build_macos
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,31 +58,30 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
+          cache: "npm"
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Vite app
-        run: npm run build
-        env:
-          ELECTRON_BUILD: 'true'
-
       - name: Build Electron (macOS)
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx electron-builder --mac --publish never
+          ELECTRON_BUILD: "true"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run electron:build:mac -- --publish never
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: frqliner-macos
-          path: release/*.dmg
+          path: release/**
+          if-no-files-found: error
 
-  # ── Create GitHub Release (on tag push) ─────────────────────────
   release:
     name: Create Release
-    needs: [build-windows, build-macos]
+    needs:
+      - build-windows
+      - build-macos
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
