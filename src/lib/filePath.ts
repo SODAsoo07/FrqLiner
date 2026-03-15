@@ -16,6 +16,14 @@ export const toFrqFileName = (value: string) => {
         return fileName.replace(/\.pmk$/i, '_wav.frq');
     }
 
+    if (/\.wav\.llsm$/i.test(fileName)) {
+        return fileName.replace(/\.wav\.llsm$/i, '_wav.frq');
+    }
+
+    if (/\.llsm$/i.test(fileName)) {
+        return fileName.replace(/\.llsm$/i, '_wav.frq');
+    }
+
     if (/\.wav$/i.test(fileName)) {
         return fileName.replace(/\.wav$/i, '_wav.frq');
     }

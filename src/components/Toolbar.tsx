@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 import { useFrqContext } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import { extractExpectedF0 } from '../lib/pitch';
-import { parseMrq, parsePmk, parseFrq, writeFrq, type FrqFrame } from '../lib/frq';
+import { parseLlsm, parseMrq, parsePmk, parseFrq, writeFrq, type FrqData, type FrqFrame } from '../lib/frq';
 import { normalizeFrqPath } from '../lib/filePath';
 import { generateBasicF0 } from '../lib/pitchTracker';
 
@@ -31,10 +31,11 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             frq?: File;
             wav?: File;
             pmk?: File;
+            llsm?: File;
             baseName?: string;
             path?: string;
-            frqData?: any;
-            sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only';
+            frqData?: FrqData;
+            sourceType?: 'frq' | 'mrq' | 'pmk' | 'llsm' | 'generated' | 'wav-only';
         }>();
 
         for (const file of fileList) {
@@ -57,6 +58,13 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 const key = path.replace(/_wav\.pmk$/i, '').replace(/\.pmk$/i, '');
                 const group = groups.get(key) || { baseName, path };
                 group.pmk = file;
+                groups.set(key, group);
+            } else if (file.name.endsWith('.llsm')) {
+                const baseName = file.name.replace(/\.wav\.llsm$/i, '').replace(/\.llsm$/i, '');
+                const key = path.replace(/\.wav\.llsm$/i, '').replace(/\.llsm$/i, '');
+                const group = groups.get(key) || { baseName, path };
+                group.llsm = file;
+                group.sourceType = 'llsm';
                 groups.set(key, group);
             } else if (file.name.endsWith('.mrq')) {
                 const buffer = await file.arrayBuffer();
@@ -93,7 +101,13 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
         const entryBase = (entryName: string) =>
             entryName.replace(/_wav\.frq$/i, '').replace(/\.frq$/i, '').toLowerCase();
         const groupBase = (group: { baseName?: string }, key: string) =>
-            (group.baseName || key).replace(/_wav\.frq$/i, '').replace(/\.frq$/i, '').replace(/\.wav$/i, '').toLowerCase();
+            (group.baseName || key)
+                .replace(/_wav\.frq$/i, '')
+                .replace(/\.frq$/i, '')
+                .replace(/\.wav\.llsm$/i, '')
+                .replace(/\.llsm$/i, '')
+                .replace(/\.wav$/i, '')
+                .toLowerCase();
 
         const keysToSkip = new Set<string>();
 
@@ -109,7 +123,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 }
             }
 
-            if ((group.frq || group.pmk) && !group.wav) {
+            if ((group.frq || group.pmk || group.llsm) && !group.wav) {
                 const match = files.find(entry => entryBase(entry.name) === gb && entry.sourceType === 'wav-only');
                 if (match) {
                     try {
@@ -118,6 +132,9 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         if (group.frq) {
                             frqFileObj = group.frq;
                             frqData = parseFrq(await group.frq.arrayBuffer());
+                        } else if (group.llsm) {
+                            frqData = parseLlsm(await group.llsm.arrayBuffer());
+                            frqFileObj = new File([new ArrayBuffer(0)], `${gb}_wav.frq`);
                         } else {
                             const wavBuf = await match.wavFile!.arrayBuffer();
                             const ac = new AudioContext();
@@ -128,7 +145,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                             frqData = parsePmk(await group.pmk!.arrayBuffer(), frameCount, sampleRate);
                             frqFileObj = new File([new ArrayBuffer(0)], `${gb}_wav.frq`);
                         }
-                        importFrqToEntry(match.id, frqData, frqFileObj, group.frq ? 'frq' : 'pmk');
+                        importFrqToEntry(match.id, frqData, frqFileObj, group.frq ? 'frq' : group.llsm ? 'llsm' : 'pmk');
                         keysToSkip.add(key);
                     } catch (err) {
                         console.error('Merge frq to wav-only failed', err);
@@ -142,17 +159,27 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             if (keysToSkip.has(baseName)) continue;
             const expectedF0 = extractExpectedF0(group.baseName || baseName);
 
-            if (group.frq) {
+            if (group.frq || group.llsm) {
                 try {
                     let frqData = group.frqData;
-                    const sourceType = group.sourceType || 'frq';
-                    if (!frqData) frqData = parseFrq(await group.frq.arrayBuffer());
+                    const sourceType = group.sourceType || (group.llsm ? 'llsm' : 'frq');
+                    if (!frqData) {
+                        if (group.frq) {
+                            frqData = parseFrq(await group.frq.arrayBuffer());
+                        } else if (group.llsm) {
+                            frqData = parseLlsm(await group.llsm.arrayBuffer());
+                        }
+                    }
+                    if (!frqData) continue;
+
+                    const frqFile = group.frq || new File([new ArrayBuffer(0)], `${(group.baseName || baseName).replace(/\.wav$/i, '')}_wav.frq`);
+                    const pathSourceName = group.path || group.frq?.name || group.llsm?.name || frqFile.name;
                     newEntries.push({
                         id: crypto.randomUUID(),
-                        frqFile: group.frq,
+                        frqFile,
                         wavFile: group.wav || null,
-                        name: group.frq.name,
-                        path: normalizeFrqPath(group.path || group.frq.name, group.frq.name),
+                        name: frqFile.name,
+                        path: normalizeFrqPath(pathSourceName, frqFile.name),
                         frqData,
                         originalFrqData: frqData,
                         history: [],
@@ -162,7 +189,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         sourceType,
                     });
                 } catch (err) {
-                    console.error(`Failed to parse ${group.frq.name}`, err);
+                    console.error(`Failed to parse ${group.frq?.name || group.llsm?.name || baseName}`, err);
                 }
             } else if (group.pmk) {
                 try {
@@ -292,7 +319,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             <button onClick={() => frqInputRef.current?.click()} style={btnStyle('#0d6efd')}>
                 {t('openFiles')}
             </button>
-            <input ref={frqInputRef} type="file" multiple accept=".frq,.wav,.mrq,.pmk" onChange={handleFrqChange} style={{ display: 'none' }} />
+            <input ref={frqInputRef} type="file" multiple accept=".frq,.wav,.mrq,.pmk,.llsm" onChange={handleFrqChange} style={{ display: 'none' }} />
 
             <button onClick={() => wavInputRef.current?.click()} style={btnStyle('#0dcaf0')} title="Add WAV files and pair them with loaded FRQ files">
                 {t('addWav')}

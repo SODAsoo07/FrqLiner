@@ -26,6 +26,12 @@ export interface MrqEntry {
     f0: Float32Array;
 }
 
+interface LlsmObject {
+    [key: string]: LlsmValue;
+}
+
+type LlsmValue = number | number[] | LlsmObject | null;
+
 const HEADER_SIZE = 40;
 const FRAME_SIZE = 16;
 const MAGIC = 'FREQ0003';
@@ -189,6 +195,206 @@ export function writeMrq(data: MrqData): ArrayBuffer {
     }
 
     return buffer;
+}
+
+const readAscii = (bytes: Uint8Array, offset: number, length: number) => {
+    if (offset < 0 || length < 0 || offset + length > bytes.length) {
+        throw new Error('LLSM parse error: out of bounds string read');
+    }
+    let out = '';
+    for (let i = 0; i < length; i++) {
+        out += String.fromCharCode(bytes[offset + i]);
+    }
+    return out;
+};
+
+const readTagNode = (
+    dv: DataView,
+    bytes: Uint8Array,
+    startOffset: number,
+): { value: LlsmValue; nextOffset: number } => {
+    let off = startOffset;
+    if (off >= dv.byteLength) {
+        throw new Error('LLSM parse error: node offset out of bounds');
+    }
+
+    const tag = dv.getUint8(off);
+    off += 1;
+
+    if (tag === 1) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid object node');
+        const count = dv.getInt32(off, true);
+        off += 4;
+        if (count < 0) throw new Error('LLSM parse error: negative object field count');
+
+        const obj: Record<string, LlsmValue> = {};
+        for (let i = 0; i < count; i++) {
+            if (off >= dv.byteLength) throw new Error('LLSM parse error: object key length overflow');
+            const keyLen = dv.getUint8(off);
+            off += 1;
+            const key = readAscii(bytes, off, keyLen);
+            off += keyLen;
+            const child = readTagNode(dv, bytes, off);
+            obj[key] = child.value;
+            off = child.nextOffset;
+        }
+        return { value: obj, nextOffset: off };
+    }
+
+    if (tag === 3) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid float node');
+        const value = dv.getFloat32(off, true);
+        off += 4;
+        return { value, nextOffset: off };
+    }
+
+    if (tag === 5) {
+        if (off + 8 > dv.byteLength) throw new Error('LLSM parse error: invalid vector node');
+        const n = dv.getInt32(off, true);
+        off += 4;
+        const kind = dv.getInt32(off, true);
+        off += 4;
+        if (n < 0) throw new Error('LLSM parse error: negative vector length');
+        if (off + n * 4 > dv.byteLength) throw new Error('LLSM parse error: vector data overflow');
+
+        const values: number[] = new Array(n);
+        for (let i = 0; i < n; i++) {
+            values[i] = kind === 2 ? dv.getInt32(off, true) : dv.getFloat32(off, true);
+            off += 4;
+        }
+        return { value: values, nextOffset: off };
+    }
+
+    if (tag === 6) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid blob node');
+        const n = dv.getInt32(off, true);
+        off += 4;
+        if (n < 0 || off + n > dv.byteLength) throw new Error('LLSM parse error: blob data overflow');
+        off += n;
+        return { value: null, nextOffset: off };
+    }
+
+    if (tag === 7) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid int array node');
+        const n = dv.getInt32(off, true);
+        off += 4;
+        if (n < 0 || off + n * 4 > dv.byteLength) throw new Error('LLSM parse error: int array overflow');
+        const values: number[] = new Array(n);
+        for (let i = 0; i < n; i++) {
+            values[i] = dv.getInt32(off, true);
+            off += 4;
+        }
+        return { value: values, nextOffset: off };
+    }
+
+    throw new Error(`LLSM parse error: unsupported tag ${tag}`);
+};
+
+const readFramePitch = (
+    dv: DataView,
+    bytes: Uint8Array,
+    startOffset: number,
+): { pitchHz: number; nextOffset: number } => {
+    let off = startOffset;
+    if (off >= dv.byteLength) throw new Error('LLSM frame parse error: offset out of bounds');
+
+    const tag = dv.getUint8(off);
+    off += 1;
+
+    if (tag !== 1) throw new Error(`LLSM frame parse error: expected object tag, got ${tag}`);
+    if (off + 4 > dv.byteLength) throw new Error('LLSM frame parse error: invalid object');
+
+    const count = dv.getInt32(off, true);
+    off += 4;
+    if (count < 0) throw new Error('LLSM frame parse error: negative object field count');
+
+    let pitchHz = 0;
+    for (let i = 0; i < count; i++) {
+        if (off >= dv.byteLength) throw new Error('LLSM frame parse error: key overflow');
+        const keyLen = dv.getUint8(off);
+        off += 1;
+        const key = readAscii(bytes, off, keyLen);
+        off += keyLen;
+        if (off >= dv.byteLength) throw new Error('LLSM frame parse error: value overflow');
+
+        const childTag = dv.getUint8(off);
+        if (childTag === 6) {
+            off += 1;
+            if (off + 4 > dv.byteLength) throw new Error('LLSM frame parse error: invalid blob');
+            const blobLen = dv.getInt32(off, true);
+            off += 4;
+            if (blobLen < 0 || off + blobLen > dv.byteLength) throw new Error('LLSM frame parse error: blob overflow');
+
+            if (key === '_40' && blobLen >= 4) {
+                const raw = dv.getFloat32(off, true);
+                pitchHz = Number.isFinite(raw) && raw > 1 ? raw : 0;
+            }
+            off += blobLen;
+            continue;
+        }
+
+        const child = readTagNode(dv, bytes, off);
+        off = child.nextOffset;
+    }
+
+    return { pitchHz, nextOffset: off };
+};
+
+const asRecord = (value: LlsmValue): Record<string, LlsmValue> | null =>
+    value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;
+
+const asNumber = (value: LlsmValue): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const asNumberArray = (value: LlsmValue): number[] =>
+    Array.isArray(value) ? value.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)) : [];
+
+export function parseLlsm(buffer: ArrayBuffer): FrqData {
+    const bytes = new Uint8Array(buffer);
+    const dv = new DataView(buffer);
+    if (dv.byteLength < 2) throw new Error('Invalid LLSM file: too short');
+
+    let off = 0;
+    const rootKeyLen = dv.getUint8(off);
+    off += 1;
+    const rootKey = readAscii(bytes, off, rootKeyLen);
+    off += rootKeyLen;
+
+    const rootNode = readTagNode(dv, bytes, off);
+    if (rootNode.nextOffset > dv.byteLength) throw new Error('Invalid LLSM file: root overflow');
+
+    const rootObj = asRecord(rootNode.value);
+    if (!rootObj) throw new Error('Invalid LLSM file: root object missing');
+    const dataObj = rootKey === 'data' ? rootObj : asRecord(rootObj.data) || rootObj;
+
+    const configObj = asRecord(dataObj._35);
+    const frameOffsets = asNumberArray(dataObj._3a).map(v => Math.trunc(v));
+
+    const frames: FrqFrame[] = frameOffsets.map(start => {
+        if (start < 0 || start >= dv.byteLength) {
+            return { f0: 0, amp: 100 };
+        }
+        try {
+            const { pitchHz } = readFramePitch(dv, bytes, start);
+            return { f0: Number.isFinite(pitchHz) ? pitchHz : 0, amp: 100 };
+        } catch {
+            return { f0: 0, amp: 100 };
+        }
+    });
+
+    const hopSize = configObj ? asNumber(configObj._2) : null;
+    const hopSeconds = configObj ? asNumber(configObj._c) : null;
+
+    return {
+        samplesPerWindow: hopSize && hopSize > 0 ? Math.round(hopSize) : 256,
+        windowInterval: hopSeconds && hopSeconds > 0 ? hopSeconds * 1000 : 5.805,
+        unknown20: 0,
+        unknown24: 0,
+        unknown28: 0,
+        unknown32: 0,
+        unknown36: 0,
+        frames,
+    };
 }
 
 /**

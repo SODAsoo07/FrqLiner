@@ -13,7 +13,7 @@ export interface FrqFileEntry {
     redoStack: FrqData[];
     isModified: boolean;
     expectedF0: number | null;
-    sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only';
+    sourceType?: 'frq' | 'mrq' | 'pmk' | 'llsm' | 'generated' | 'wav-only';
 }
 
 interface UpdateFrqOptions {
