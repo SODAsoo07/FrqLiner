@@ -108,6 +108,8 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
             const frqBase = entry.name
                 .replace(/_wav\.frq$/i, '')
                 .replace(/\.frq$/i, '')
+                .replace(/\.wav\.llsm$/i, '')
+                .replace(/\.llsm$/i, '')
                 .toLowerCase();
             const match = wavFiles.find(w =>
                 w.name.replace(/\.wav$/i, '').toLowerCase() === frqBase

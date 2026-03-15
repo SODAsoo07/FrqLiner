@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useFrqContext, type FrqFileEntry } from './FrqContext';
 import { useLanguage } from './LanguageContext';
-import { writeFrq } from '../lib/frq';
+import { writeFrq, writeLlsm } from '../lib/frq';
 
 interface TreeNode {
     name: string;
@@ -31,12 +31,18 @@ const buildTree = (files: FrqFileEntry[]) => {
     return root;
 };
 
-const downloadFrq = (entry: FrqFileEntry) => {
-    const blob = new Blob([writeFrq(entry.frqData)], { type: 'application/octet-stream' });
+const downloadEntry = async (entry: FrqFileEntry) => {
+    const payload = entry.sourceType === 'llsm'
+        ? writeLlsm(await entry.frqFile.arrayBuffer(), entry.frqData)
+        : writeFrq(entry.frqData);
+    const downloadName = entry.sourceType === 'llsm'
+        ? (/\.(llsm)$/i.test(entry.frqFile.name) ? entry.frqFile.name : `${entry.name}.llsm`)
+        : entry.name;
+    const blob = new Blob([payload], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = entry.name;
+    link.download = downloadName;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -117,7 +123,7 @@ const TreeItem = ({
                             title={node.file!.name}
                             onClick={event => {
                                 event.stopPropagation();
-                                downloadFrq(node.file!);
+                                void downloadEntry(node.file!);
                             }}
                             style={{
                                 border: 'none',

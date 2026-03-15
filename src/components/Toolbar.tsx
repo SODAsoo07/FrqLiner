@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 import { useFrqContext } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import { extractExpectedF0 } from '../lib/pitch';
-import { parseLlsm, parseMrq, parsePmk, parseFrq, writeFrq, type FrqData, type FrqFrame } from '../lib/frq';
+import { parseLlsm, parseMrq, parsePmk, parseFrq, writeFrq, writeLlsm, type FrqData, type FrqFrame } from '../lib/frq';
 import { normalizeFrqPath } from '../lib/filePath';
 import { generateBasicF0 } from '../lib/pitchTracker';
 
@@ -27,6 +27,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
     const [generatingPct, setGeneratingPct] = useState<number | null>(null);
 
     const processFiles = async (fileList: File[]) => {
+        const normalizePath = (value: string) => value.replace(/\\/g, '/');
         const groups = new Map<string, {
             frq?: File;
             wav?: File;
@@ -134,7 +135,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                             frqData = parseFrq(await group.frq.arrayBuffer());
                         } else if (group.llsm) {
                             frqData = parseLlsm(await group.llsm.arrayBuffer());
-                            frqFileObj = new File([new ArrayBuffer(0)], `${gb}_wav.frq`);
+                            frqFileObj = group.llsm;
                         } else {
                             const wavBuf = await match.wavFile!.arrayBuffer();
                             const ac = new AudioContext();
@@ -172,14 +173,18 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                     }
                     if (!frqData) continue;
 
-                    const frqFile = group.frq || new File([new ArrayBuffer(0)], `${(group.baseName || baseName).replace(/\.wav$/i, '')}_wav.frq`);
-                    const pathSourceName = group.path || group.frq?.name || group.llsm?.name || frqFile.name;
+                    const frqFile = group.frq
+                        || group.llsm
+                        || new File([new ArrayBuffer(0)], `${(group.baseName || baseName).replace(/\.wav$/i, '')}_wav.frq`);
+                    const pathSourceName = sourceType === 'llsm'
+                        ? normalizePath(group.path || group.llsm?.name || frqFile.name)
+                        : normalizeFrqPath(group.path || group.frq?.name || group.llsm?.name || frqFile.name, frqFile.name);
                     newEntries.push({
                         id: crypto.randomUUID(),
                         frqFile,
                         wavFile: group.wav || null,
                         name: frqFile.name,
-                        path: normalizeFrqPath(pathSourceName, frqFile.name),
+                        path: pathSourceName,
                         frqData,
                         originalFrqData: frqData,
                         history: [],
@@ -290,7 +295,18 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
 
         const zip = new JSZip();
         for (const entry of exportableFiles) {
-            zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+            if (entry.sourceType === 'llsm') {
+                const baseBuffer = await entry.frqFile.arrayBuffer();
+                const normalizedPath = entry.path.replace(/\\/g, '/');
+                const lastSlash = normalizedPath.lastIndexOf('/');
+                const dir = lastSlash >= 0 ? normalizedPath.slice(0, lastSlash + 1) : '';
+                const llsmName = /\.llsm$/i.test(entry.frqFile.name)
+                    ? entry.frqFile.name
+                    : `${entry.frqFile.name}.llsm`;
+                zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData));
+            } else {
+                zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+            }
         }
 
         const blob = await zip.generateAsync({ type: 'blob' });

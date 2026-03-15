@@ -294,7 +294,7 @@ const readFramePitch = (
     dv: DataView,
     bytes: Uint8Array,
     startOffset: number,
-): { pitchHz: number; nextOffset: number } => {
+): { pitchHz: number; pitchOffset: number; nextOffset: number } => {
     let off = startOffset;
     if (off >= dv.byteLength) throw new Error('LLSM frame parse error: offset out of bounds');
 
@@ -309,6 +309,7 @@ const readFramePitch = (
     if (count < 0) throw new Error('LLSM frame parse error: negative object field count');
 
     let pitchHz = 0;
+    let pitchOffset = -1;
     for (let i = 0; i < count; i++) {
         if (off >= dv.byteLength) throw new Error('LLSM frame parse error: key overflow');
         const keyLen = dv.getUint8(off);
@@ -328,6 +329,7 @@ const readFramePitch = (
             if (key === '_40' && blobLen >= 4) {
                 const raw = dv.getFloat32(off, true);
                 pitchHz = Number.isFinite(raw) && raw > 1 ? raw : 0;
+                pitchOffset = off;
             }
             off += blobLen;
             continue;
@@ -337,7 +339,7 @@ const readFramePitch = (
         off = child.nextOffset;
     }
 
-    return { pitchHz, nextOffset: off };
+    return { pitchHz, pitchOffset, nextOffset: off };
 };
 
 const asRecord = (value: LlsmValue): Record<string, LlsmValue> | null =>
@@ -395,6 +397,44 @@ export function parseLlsm(buffer: ArrayBuffer): FrqData {
         unknown36: 0,
         frames,
     };
+}
+
+export function writeLlsm(baseBuffer: ArrayBuffer, data: FrqData): ArrayBuffer {
+    const output = baseBuffer.slice(0);
+    const bytes = new Uint8Array(output);
+    const dv = new DataView(output);
+    if (dv.byteLength < 2) throw new Error('Invalid LLSM file: too short');
+
+    let off = 0;
+    const rootKeyLen = dv.getUint8(off);
+    off += 1;
+    const rootKey = readAscii(bytes, off, rootKeyLen);
+    off += rootKeyLen;
+
+    const rootNode = readTagNode(dv, bytes, off);
+    if (rootNode.nextOffset > dv.byteLength) throw new Error('Invalid LLSM file: root overflow');
+
+    const rootObj = asRecord(rootNode.value);
+    if (!rootObj) throw new Error('Invalid LLSM file: root object missing');
+    const dataObj = rootKey === 'data' ? rootObj : asRecord(rootObj.data) || rootObj;
+    const frameOffsets = asNumberArray(dataObj._3a).map(v => Math.trunc(v));
+    const frameCount = Math.min(frameOffsets.length, data.frames.length);
+
+    for (let i = 0; i < frameCount; i++) {
+        const start = frameOffsets[i];
+        if (start < 0 || start >= dv.byteLength) continue;
+        try {
+            const meta = readFramePitch(dv, bytes, start);
+            if (meta.pitchOffset < 0 || meta.pitchOffset + 4 > dv.byteLength) continue;
+            const nextPitch = data.frames[i]?.f0 ?? 0;
+            const safePitch = Number.isFinite(nextPitch) && nextPitch > 1 ? nextPitch : 0;
+            dv.setFloat32(meta.pitchOffset, safePitch, true);
+        } catch {
+            // Skip malformed frame and continue patching others
+        }
+    }
+
+    return output;
 }
 
 /**
