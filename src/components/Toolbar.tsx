@@ -3,7 +3,18 @@ import JSZip from 'jszip';
 import { useFrqContext } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import { extractExpectedF0 } from '../lib/pitch';
-import { parseLlsm, parseMrq, parsePmk, parseFrq, writeFrq, writeLlsm, type FrqData, type FrqFrame } from '../lib/frq';
+import {
+    parseLlsm,
+    parseMrq,
+    parsePmk,
+    parseFrq,
+    readLlsmExperimentalSettings,
+    writeFrq,
+    writeLlsm,
+    type FrqData,
+    type FrqFrame,
+    type LlsmExperimentalSettings,
+} from '../lib/frq';
 import { normalizeFrqPath } from '../lib/filePath';
 import { generateBasicF0 } from '../lib/pitchTracker';
 
@@ -36,6 +47,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             baseName?: string;
             path?: string;
             frqData?: FrqData;
+            llsmExperimental?: LlsmExperimentalSettings | null;
             sourceType?: 'frq' | 'mrq' | 'pmk' | 'llsm' | 'generated' | 'wav-only';
         }>();
 
@@ -134,7 +146,9 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                             frqFileObj = group.frq;
                             frqData = parseFrq(await group.frq.arrayBuffer());
                         } else if (group.llsm) {
-                            frqData = parseLlsm(await group.llsm.arrayBuffer());
+                            const llsmBuf = await group.llsm.arrayBuffer();
+                            frqData = parseLlsm(llsmBuf);
+                            group.llsmExperimental = readLlsmExperimentalSettings(llsmBuf);
                             frqFileObj = group.llsm;
                         } else {
                             const wavBuf = await match.wavFile!.arrayBuffer();
@@ -146,7 +160,13 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                             frqData = parsePmk(await group.pmk!.arrayBuffer(), frameCount, sampleRate);
                             frqFileObj = new File([new ArrayBuffer(0)], `${gb}_wav.frq`);
                         }
-                        importFrqToEntry(match.id, frqData, frqFileObj, group.frq ? 'frq' : group.llsm ? 'llsm' : 'pmk');
+                        importFrqToEntry(
+                            match.id,
+                            frqData,
+                            frqFileObj,
+                            group.frq ? 'frq' : group.llsm ? 'llsm' : 'pmk',
+                            group.llsm ? (group.llsmExperimental ?? null) : undefined,
+                        );
                         keysToSkip.add(key);
                     } catch (err) {
                         console.error('Merge frq to wav-only failed', err);
@@ -168,7 +188,11 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         if (group.frq) {
                             frqData = parseFrq(await group.frq.arrayBuffer());
                         } else if (group.llsm) {
-                            frqData = parseLlsm(await group.llsm.arrayBuffer());
+                            const llsmBuf = await group.llsm.arrayBuffer();
+                            frqData = parseLlsm(llsmBuf);
+                            if (!group.llsmExperimental) {
+                                group.llsmExperimental = readLlsmExperimentalSettings(llsmBuf);
+                            }
                         }
                     }
                     if (!frqData) continue;
@@ -192,6 +216,8 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         isModified: false,
                         expectedF0,
                         sourceType,
+                        llsmExperimental: sourceType === 'llsm' ? (group.llsmExperimental ?? null) : undefined,
+                        originalLlsmExperimental: sourceType === 'llsm' ? (group.llsmExperimental ?? null) : undefined,
                     });
                 } catch (err) {
                     console.error(`Failed to parse ${group.frq?.name || group.llsm?.name || baseName}`, err);
@@ -303,7 +329,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 const llsmName = /\.llsm$/i.test(entry.frqFile.name)
                     ? entry.frqFile.name
                     : `${entry.frqFile.name}.llsm`;
-                zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData));
+                zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, entry.llsmExperimental));
             } else {
                 zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
             }

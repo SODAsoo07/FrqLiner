@@ -26,11 +26,29 @@ export interface MrqEntry {
     f0: Float32Array;
 }
 
+export interface LlsmExperimentalSettings {
+    _9: number;
+    _a: number;
+    _b: number;
+    _12: number;
+    _13: number[];
+}
+
 interface LlsmObject {
     [key: string]: LlsmValue;
 }
 
 type LlsmValue = number | number[] | LlsmObject | null;
+
+interface LlsmIndexNode {
+    tag: number;
+    valueOffset?: number;
+    valuesOffset?: number;
+    length?: number;
+    kind?: number;
+}
+
+type LlsmIndex = Record<string, LlsmIndexNode>;
 
 const HEADER_SIZE = 40;
 const FRAME_SIZE = 16;
@@ -290,6 +308,97 @@ const readTagNode = (
     throw new Error(`LLSM parse error: unsupported tag ${tag}`);
 };
 
+const readTagNodeIndexed = (
+    dv: DataView,
+    bytes: Uint8Array,
+    startOffset: number,
+    keyPath: string,
+    index: LlsmIndex,
+): { value: LlsmValue; nextOffset: number } => {
+    let off = startOffset;
+    if (off >= dv.byteLength) {
+        throw new Error('LLSM parse error: node offset out of bounds');
+    }
+
+    const tag = dv.getUint8(off);
+    off += 1;
+    index[keyPath] = { tag };
+
+    if (tag === 1) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid object node');
+        const count = dv.getInt32(off, true);
+        off += 4;
+        if (count < 0) throw new Error('LLSM parse error: negative object field count');
+
+        const obj: Record<string, LlsmValue> = {};
+        for (let i = 0; i < count; i++) {
+            if (off >= dv.byteLength) throw new Error('LLSM parse error: object key length overflow');
+            const keyLen = dv.getUint8(off);
+            off += 1;
+            const key = readAscii(bytes, off, keyLen);
+            off += keyLen;
+            const childPath = `${keyPath}.${key}`;
+            const child = readTagNodeIndexed(dv, bytes, off, childPath, index);
+            obj[key] = child.value;
+            off = child.nextOffset;
+        }
+        return { value: obj, nextOffset: off };
+    }
+
+    if (tag === 3) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid float node');
+        const value = dv.getFloat32(off, true);
+        index[keyPath].valueOffset = off;
+        off += 4;
+        return { value, nextOffset: off };
+    }
+
+    if (tag === 5) {
+        if (off + 8 > dv.byteLength) throw new Error('LLSM parse error: invalid vector node');
+        const n = dv.getInt32(off, true);
+        off += 4;
+        const kind = dv.getInt32(off, true);
+        off += 4;
+        if (n < 0) throw new Error('LLSM parse error: negative vector length');
+        if (off + n * 4 > dv.byteLength) throw new Error('LLSM parse error: vector data overflow');
+
+        index[keyPath].kind = kind;
+        index[keyPath].length = n;
+        index[keyPath].valuesOffset = off;
+
+        const values: number[] = new Array(n);
+        for (let i = 0; i < n; i++) {
+            values[i] = kind === 2 ? dv.getInt32(off, true) : dv.getFloat32(off, true);
+            off += 4;
+        }
+        return { value: values, nextOffset: off };
+    }
+
+    if (tag === 6) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid blob node');
+        const n = dv.getInt32(off, true);
+        off += 4;
+        if (n < 0 || off + n > dv.byteLength) throw new Error('LLSM parse error: blob data overflow');
+        off += n;
+        return { value: null, nextOffset: off };
+    }
+
+    if (tag === 7) {
+        if (off + 4 > dv.byteLength) throw new Error('LLSM parse error: invalid int array node');
+        const n = dv.getInt32(off, true);
+        off += 4;
+        if (n < 0 || off + n * 4 > dv.byteLength) throw new Error('LLSM parse error: int array overflow');
+        const values: number[] = new Array(n);
+        for (let i = 0; i < n; i++) {
+            values[i] = dv.getInt32(off, true);
+            off += 4;
+        }
+        return { value: values, nextOffset: off };
+    }
+
+    throw new Error(`LLSM parse error: unsupported tag ${tag}`);
+};
+
 const readFramePitch = (
     dv: DataView,
     bytes: Uint8Array,
@@ -351,6 +460,68 @@ const asNumber = (value: LlsmValue): number | null =>
 const asNumberArray = (value: LlsmValue): number[] =>
     Array.isArray(value) ? value.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)) : [];
 
+const isStrictlyAscending = (values: number[]) => {
+    for (let i = 1; i < values.length; i++) {
+        if (!(values[i] > values[i - 1])) return false;
+    }
+    return true;
+};
+
+export function sanitizeLlsmExperimentalSettings(
+    candidate: Partial<LlsmExperimentalSettings>,
+    existing13Length?: number,
+): LlsmExperimentalSettings | null {
+    const _9 = Number(candidate._9);
+    const _a = Number(candidate._a);
+    const _b = Number(candidate._b);
+    const _13 = Array.isArray(candidate._13)
+        ? candidate._13.map(v => Number(v)).filter(v => Number.isFinite(v))
+        : [];
+
+    if (!Number.isFinite(_9) || _9 <= 0) return null;
+    if (!Number.isFinite(_a) || _a <= 0) return null;
+    if (!Number.isFinite(_b) || _b <= 0) return null;
+    if (_13.length === 0) return null;
+    if (!isStrictlyAscending(_13) || _13.some(v => v <= 0)) return null;
+    if (typeof existing13Length === 'number' && existing13Length > 0 && _13.length !== existing13Length) return null;
+
+    const _12 = _13.length + 1;
+    return { _9, _a, _b, _12, _13 };
+}
+
+export function readLlsmExperimentalSettings(buffer: ArrayBuffer): LlsmExperimentalSettings | null {
+    const bytes = new Uint8Array(buffer);
+    const dv = new DataView(buffer);
+    if (dv.byteLength < 2) return null;
+
+    let off = 0;
+    const rootKeyLen = dv.getUint8(off);
+    off += 1;
+    const rootKey = readAscii(bytes, off, rootKeyLen);
+    off += rootKeyLen;
+
+    const rootNode = readTagNode(dv, bytes, off);
+    const rootObj = asRecord(rootNode.value);
+    if (!rootObj) return null;
+    const dataObj = rootKey === 'data' ? rootObj : asRecord(rootObj.data) || rootObj;
+    const configObj = asRecord(dataObj._35);
+    if (!configObj) return null;
+
+    const _9 = asNumber(configObj._9);
+    const _a = asNumber(configObj._a);
+    const _b = asNumber(configObj._b);
+    const _13 = asNumberArray(configObj._13);
+    if (_9 == null || _a == null || _b == null || _13.length === 0) return null;
+
+    return sanitizeLlsmExperimentalSettings({
+        _9,
+        _a,
+        _b,
+        _12: asNumber(configObj._12) ?? (_13.length + 1),
+        _13,
+    }, _13.length);
+}
+
 export function parseLlsm(buffer: ArrayBuffer): FrqData {
     const bytes = new Uint8Array(buffer);
     const dv = new DataView(buffer);
@@ -399,7 +570,11 @@ export function parseLlsm(buffer: ArrayBuffer): FrqData {
     };
 }
 
-export function writeLlsm(baseBuffer: ArrayBuffer, data: FrqData): ArrayBuffer {
+export function writeLlsm(
+    baseBuffer: ArrayBuffer,
+    data: FrqData,
+    experimentalSettings?: LlsmExperimentalSettings | null,
+): ArrayBuffer {
     const output = baseBuffer.slice(0);
     const bytes = new Uint8Array(output);
     const dv = new DataView(output);
@@ -411,7 +586,8 @@ export function writeLlsm(baseBuffer: ArrayBuffer, data: FrqData): ArrayBuffer {
     const rootKey = readAscii(bytes, off, rootKeyLen);
     off += rootKeyLen;
 
-    const rootNode = readTagNode(dv, bytes, off);
+    const index: LlsmIndex = {};
+    const rootNode = readTagNodeIndexed(dv, bytes, off, rootKey, index);
     if (rootNode.nextOffset > dv.byteLength) throw new Error('Invalid LLSM file: root overflow');
 
     const rootObj = asRecord(rootNode.value);
@@ -419,6 +595,42 @@ export function writeLlsm(baseBuffer: ArrayBuffer, data: FrqData): ArrayBuffer {
     const dataObj = rootKey === 'data' ? rootObj : asRecord(rootObj.data) || rootObj;
     const frameOffsets = asNumberArray(dataObj._3a).map(v => Math.trunc(v));
     const frameCount = Math.min(frameOffsets.length, data.frames.length);
+
+    if (experimentalSettings) {
+        const configPrefix = `${rootKey}._35`;
+        const node9 = index[`${configPrefix}._9`];
+        const nodeA = index[`${configPrefix}._a`];
+        const nodeB = index[`${configPrefix}._b`];
+        const node12 = index[`${configPrefix}._12`];
+        const node13 = index[`${configPrefix}._13`];
+
+        const canPatchHeaders =
+            node9?.tag === 3 && typeof node9.valueOffset === 'number' &&
+            nodeA?.tag === 3 && typeof nodeA.valueOffset === 'number' &&
+            nodeB?.tag === 3 && typeof nodeB.valueOffset === 'number' &&
+            node12?.tag === 3 && typeof node12.valueOffset === 'number' &&
+            node13?.tag === 5 && typeof node13.valuesOffset === 'number' &&
+            typeof node13.length === 'number' && node13.length > 0;
+
+        if (canPatchHeaders) {
+            const sanitized = sanitizeLlsmExperimentalSettings(experimentalSettings, node13.length);
+            if (sanitized) {
+                dv.setFloat32(node9.valueOffset!, sanitized._9, true);
+                dv.setFloat32(nodeA.valueOffset!, sanitized._a, true);
+                dv.setFloat32(nodeB.valueOffset!, sanitized._b, true);
+                dv.setFloat32(node12.valueOffset!, sanitized._12, true);
+
+                for (let i = 0; i < node13.length!; i++) {
+                    const writeOffset = node13.valuesOffset! + i * 4;
+                    if (node13.kind === 2) {
+                        dv.setInt32(writeOffset, Math.round(sanitized._13[i]), true);
+                    } else {
+                        dv.setFloat32(writeOffset, sanitized._13[i], true);
+                    }
+                }
+            }
+        }
+    }
 
     for (let i = 0; i < frameCount; i++) {
         const start = frameOffsets[i];

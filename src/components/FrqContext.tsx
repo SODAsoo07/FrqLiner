@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import type { FrqData } from '../lib/frq';
+import type { FrqData, LlsmExperimentalSettings } from '../lib/frq';
 
 export interface FrqFileEntry {
     id: string;
@@ -14,6 +14,8 @@ export interface FrqFileEntry {
     isModified: boolean;
     expectedF0: number | null;
     sourceType?: 'frq' | 'mrq' | 'pmk' | 'llsm' | 'generated' | 'wav-only';
+    llsmExperimental?: LlsmExperimentalSettings | null;
+    originalLlsmExperimental?: LlsmExperimentalSettings | null;
 }
 
 interface UpdateFrqOptions {
@@ -27,8 +29,15 @@ interface FrqContextState {
     addFiles: (entries: FrqFileEntry[]) => void;
     setActiveFile: (id: string) => void;
     updateFrqData: (id: string, newFrqData: FrqData, options?: UpdateFrqOptions) => void;
+    updateLlsmExperimental: (id: string, settings: LlsmExperimentalSettings) => void;
     updateWavFile: (wavFiles: File[]) => void;
-    importFrqToEntry: (id: string, frqData: FrqData, frqFile: File, sourceType?: FrqFileEntry['sourceType']) => void;
+    importFrqToEntry: (
+        id: string,
+        frqData: FrqData,
+        frqFile: File,
+        sourceType?: FrqFileEntry['sourceType'],
+        llsmExperimental?: LlsmExperimentalSettings | null,
+    ) => void;
     resetFrqData: (id: string) => void;
     undo: (id: string) => void;
     redo: (id: string) => void;
@@ -63,10 +72,22 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
         frqData: FrqData,
         frqFile: File,
         sourceType: FrqFileEntry['sourceType'] = 'frq',
+        llsmExperimental?: LlsmExperimentalSettings | null,
     ) => {
         setFiles(prev => prev.map(f => {
             if (f.id !== id) return f;
-            return { ...f, frqData, originalFrqData: frqData, frqFile, sourceType, history: [], redoStack: [], isModified: false };
+            return {
+                ...f,
+                frqData,
+                originalFrqData: frqData,
+                frqFile,
+                sourceType,
+                llsmExperimental: sourceType === 'llsm' ? (llsmExperimental ?? null) : undefined,
+                originalLlsmExperimental: sourceType === 'llsm' ? (llsmExperimental ?? null) : undefined,
+                history: [],
+                redoStack: [],
+                isModified: false,
+            };
         }));
     };
 
@@ -74,7 +95,14 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     const resetFrqData = (id: string) => {
         setFiles(prev => prev.map(f => {
             if (f.id !== id) return f;
-            return { ...f, frqData: f.originalFrqData, history: [], redoStack: [], isModified: false };
+            return {
+                ...f,
+                frqData: f.originalFrqData,
+                llsmExperimental: f.originalLlsmExperimental,
+                history: [],
+                redoStack: [],
+                isModified: false,
+            };
         }));
     };
     const setActiveFile = (id: string) => {
@@ -98,6 +126,20 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
                 }
                 return f;
             })
+        );
+    };
+
+    const updateLlsmExperimental = (id: string, settings: LlsmExperimentalSettings) => {
+        setFiles(prev =>
+            prev.map(f => {
+                if (f.id !== id) return f;
+                if (f.sourceType !== 'llsm') return f;
+                return {
+                    ...f,
+                    llsmExperimental: settings,
+                    isModified: true,
+                };
+            }),
         );
     };
 
@@ -161,7 +203,7 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     }
 
     return (
-        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateWavFile, importFrqToEntry, resetFrqData, undo, redo, clearFiles }}>
+        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateLlsmExperimental, updateWavFile, importFrqToEntry, resetFrqData, undo, redo, clearFiles }}>
             {children}
         </FrqContext.Provider>
     );
