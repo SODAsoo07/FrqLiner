@@ -1,0 +1,298 @@
+{
+  "file": "C:\\Users\\oyh57\\SODAsoo1\\Devs\\Frqliner\\tmp_llsm_recheck\\_a-a-i-a-u-a-e.wav.llsm",
+  "sizeBytes": 319627,
+  "parsedHeaderBytes": 4249,
+  "rootKey": "data",
+  "version": 524,
+  "durationSec": 5.9326982498168945,
+  "config": {
+    "_1": 1022,
+    "_2": 256,
+    "_3": 80,
+    "_4": 4,
+    "_8": 96,
+    "_9": 15000,
+    "_a": 12000,
+    "_b": 24000,
+    "_c": 0.00580498855561018,
+    "_12": 4,
+    "_13": {
+      "tag": 5,
+      "kind": 1,
+      "values": [
+        3000,
+        6000,
+        12000
+      ]
+    }
+  },
+  "frameIndexCount": 1022,
+  "frameOffsetMin": 4253,
+  "frameOffsetMax": 319440,
+  "frameGapHistogram": [
+    [
+      187,
+      428
+    ],
+    [
+      397,
+      390
+    ],
+    [
+      392,
+      129
+    ],
+    [
+      402,
+      69
+    ],
+    [
+      407,
+      4
+    ],
+    [
+      387,
+      1
+    ]
+  ],
+  "frameBlob1Histogram": [
+    [
+      16,
+      429
+    ],
+    [
+      162,
+      390
+    ],
+    [
+      157,
+      129
+    ],
+    [
+      167,
+      69
+    ],
+    [
+      172,
+      4
+    ],
+    [
+      152,
+      1
+    ]
+  ],
+  "frameBlob2Histogram": [
+    [
+      203,
+      593
+    ],
+    [
+      139,
+      429
+    ]
+  ],
+  "firstFrames": [
+    {
+      "start": 4253,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 4440,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 4627,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 4814,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 5001,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 5188,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 5375,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 5562,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 5749,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 5936,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 6123,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 6310,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    }
+  ],
+  "lastFrames": [
+    {
+      "start": 318131,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 318318,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 318505,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 318692,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 318879,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 319066,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 319253,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    },
+    {
+      "start": 319440,
+      "size": 187,
+      "key1": "_40",
+      "blob1Len": 16,
+      "key2": "_2f",
+      "key3": "_40",
+      "blob2Len": 139,
+      "pitchHz": 0
+    }
+  ]
+}

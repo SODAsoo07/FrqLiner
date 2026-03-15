@@ -3,6 +3,7 @@ import { useFrqContext } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import Meyda from 'meyda';
 import {
+    LLSM_EXPERIMENTAL_INPUT_LIMITS,
     sanitizeLlsmExperimentalSettingsForPatch,
     type FrqFrame,
     type LlsmExperimentalSettings,
@@ -24,6 +25,7 @@ const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSi
     default: { bufferSize: 2048, hopSize: 256, visibleBins: 120, gain: 32 },
     high: { bufferSize: 4096, hopSize: 128, visibleBins: 192, gain: 36 },
 };
+const EXPERIMENTAL_LIMITS = LLSM_EXPERIMENTAL_INPUT_LIMITS;
 
 const LOG_MIN_FREQ = Math.log(MIN_FREQ);
 const LOG_VISUAL_MAX_FREQ = Math.log(VISUAL_MAX_FREQ);
@@ -126,6 +128,11 @@ const Editor = () => {
     const [globalSpectrogramQuality, setGlobalSpectrogramQuality] = useState<SpectrogramQuality>('low');
     const [fileSpectrogramQualities, setFileSpectrogramQualities] = useState<Record<string, SpectrogramQuality>>({});
     const [editorTab, setEditorTab] = useState<'pitch' | 'experimental'>('pitch');
+    const [llsmNumericInputs, setLlsmNumericInputs] = useState<{ _9: string; _a: string; _b: string }>({
+        _9: '',
+        _a: '',
+        _b: '',
+    });
     const [llsm13Input, setLlsm13Input] = useState<string>('');
 
     // Storing decoded audio as STATE so renders are triggered
@@ -149,6 +156,7 @@ const Editor = () => {
         dragStartFrqRef.current = null;
         dragDraftFrqRef.current = null;
         setEditorTab('pitch');
+        setLlsmNumericInputs({ _9: '', _a: '', _b: '' });
 
         if (audioRef.current) {
             audioRef.current.pause();
@@ -186,12 +194,28 @@ const Editor = () => {
 
     useEffect(() => {
         if (!activeFile || activeFile.sourceType !== 'llsm') {
+            setLlsmNumericInputs({ _9: '', _a: '', _b: '' });
             setLlsm13Input('');
             return;
         }
+        const current = activeFile.llsmExperimental;
+        if (current) {
+            setLlsmNumericInputs({
+                _9: Number(current._9.toFixed(6)).toString(),
+                _a: Number(current._a.toFixed(6)).toString(),
+                _b: Number(current._b.toFixed(6)).toString(),
+            });
+        }
         const values = activeFile.llsmExperimental?._13 ?? [];
         setLlsm13Input(values.map(v => Number(v.toFixed(6))).join(', '));
-    }, [activeFile?.id, activeFile?.sourceType, activeFile?.llsmExperimental?._13]);
+    }, [
+        activeFile?.id,
+        activeFile?.sourceType,
+        activeFile?.llsmExperimental?._9,
+        activeFile?.llsmExperimental?._a,
+        activeFile?.llsmExperimental?._b,
+        activeFile?.llsmExperimental?._13,
+    ]);
 
     useEffect(() => {
         setFileSpectrogramQualities(prev => {
@@ -706,6 +730,11 @@ const Editor = () => {
 
     const updateExperimentalField = (field: '_9' | '_a' | '_b', value: number) => {
         if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
+        const limits = EXPERIMENTAL_LIMITS[field];
+        if (value < limits.min || value > limits.max) {
+            window.alert(t('experimentalUnsafe'));
+            return;
+        }
         const current = activeFile.llsmExperimental;
         const baseline = activeFile.originalLlsmExperimental ?? current;
         const next: LlsmExperimentalSettings = {
@@ -720,6 +749,21 @@ const Editor = () => {
         updateLlsmExperimental(activeFile.id, sanitized);
     };
 
+    const applyExperimentalNumericField = (field: '_9' | '_a' | '_b') => {
+        if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
+        const raw = llsmNumericInputs[field].trim();
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed)) {
+            window.alert(t('experimentalUnsafe'));
+            setLlsmNumericInputs(prev => ({
+                ...prev,
+                [field]: Number(activeFile.llsmExperimental![field].toFixed(6)).toString(),
+            }));
+            return;
+        }
+        updateExperimentalField(field, parsed);
+    };
+
     const applyExperimental13 = () => {
         if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
         const baseline = activeFile.originalLlsmExperimental ?? activeFile.llsmExperimental;
@@ -727,6 +771,14 @@ const Editor = () => {
             .split(',')
             .map(v => Number(v.trim()))
             .filter(v => Number.isFinite(v));
+        for (let i = 0; i < parsed.length; i++) {
+            const limits = EXPERIMENTAL_LIMITS._13[i] ?? EXPERIMENTAL_LIMITS._13Fallback;
+            if (parsed[i] < limits.min || parsed[i] > limits.max) {
+                window.alert(t('experimentalUnsafe'));
+                setLlsm13Input(activeFile.llsmExperimental._13.map(v => Number(v.toFixed(6))).join(', '));
+                return;
+            }
+        }
         const sanitized = sanitizeLlsmExperimentalSettingsForPatch({
             ...activeFile.llsmExperimental,
             _13: parsed,
@@ -939,26 +991,57 @@ const Editor = () => {
                             </select>
                         </label>
                         <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('voicingModeDesc')}</span>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('llsmExpRange')}</span>
                         <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
                             `_9`
-                            <input type="number" step="0.01" min="0.000001" value={llsmExperimental._9} onChange={e => {
-                                const v = Number(e.target.value);
-                                if (Number.isFinite(v) && v > 0) updateExperimentalField('_9', v);
-                            }} style={{ width: 82, fontSize: 11, padding: '1px 4px' }} />
+                            <input
+                                type="number"
+                                step={EXPERIMENTAL_LIMITS._9.step}
+                                min={EXPERIMENTAL_LIMITS._9.min}
+                                max={EXPERIMENTAL_LIMITS._9.max}
+                                value={llsmNumericInputs._9}
+                                onChange={e => setLlsmNumericInputs(prev => ({ ...prev, _9: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimentalNumericField('_9');
+                                }}
+                                style={{ width: 82, fontSize: 11, padding: '1px 4px' }}
+                            />
                         </label>
                         <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
                             `_a`
-                            <input type="number" step="0.01" min="0.000001" value={llsmExperimental._a} onChange={e => {
-                                const v = Number(e.target.value);
-                                if (Number.isFinite(v) && v > 0) updateExperimentalField('_a', v);
-                            }} style={{ width: 82, fontSize: 11, padding: '1px 4px' }} />
+                            <input
+                                type="number"
+                                step={EXPERIMENTAL_LIMITS._a.step}
+                                min={EXPERIMENTAL_LIMITS._a.min}
+                                max={EXPERIMENTAL_LIMITS._a.max}
+                                value={llsmNumericInputs._a}
+                                onChange={e => setLlsmNumericInputs(prev => ({ ...prev, _a: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimentalNumericField('_a');
+                                }}
+                                style={{ width: 82, fontSize: 11, padding: '1px 4px' }}
+                            />
                         </label>
                         <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
                             `_b`
-                            <input type="number" step="0.01" min="0.000001" value={llsmExperimental._b} onChange={e => {
-                                const v = Number(e.target.value);
-                                if (Number.isFinite(v) && v > 0) updateExperimentalField('_b', v);
-                            }} style={{ width: 82, fontSize: 11, padding: '1px 4px' }} />
+                            <input
+                                type="number"
+                                step={EXPERIMENTAL_LIMITS._b.step}
+                                min={EXPERIMENTAL_LIMITS._b.min}
+                                max={EXPERIMENTAL_LIMITS._b.max}
+                                value={llsmNumericInputs._b}
+                                onChange={e => setLlsmNumericInputs(prev => ({ ...prev, _b: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimentalNumericField('_b');
+                                }}
+                                style={{ width: 82, fontSize: 11, padding: '1px 4px' }}
+                            />
                         </label>
                         <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
                             `_12`
@@ -969,7 +1052,11 @@ const Editor = () => {
                             <input
                                 value={llsm13Input}
                                 onChange={e => setLlsm13Input(e.target.value)}
-                                onBlur={applyExperimental13}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimental13();
+                                }}
                                 style={{ flex: 1, minWidth: 180, fontSize: 11, padding: '1px 4px' }}
                             />
                         </label>

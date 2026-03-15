@@ -59,9 +59,29 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     const [files, setFiles] = useState<FrqFileEntry[]>([]);
     const [activeFileId, setActiveFileId] = useState<string | null>(null);
 
+    const cloneLlsmExperimental = (settings: LlsmExperimentalSettings): LlsmExperimentalSettings => ({
+        ...settings,
+        _13: [...settings._13],
+    });
+
+    const pickCanonicalLlsmExperimental = (entries: FrqFileEntry[]) => {
+        const found = entries.find(entry => entry.sourceType === 'llsm' && entry.llsmExperimental)?.llsmExperimental;
+        return found ? cloneLlsmExperimental(found) : null;
+    };
+
     const addFiles = (newFiles: FrqFileEntry[]) => {
         setFiles((prev) => {
-            const added = [...prev, ...newFiles];
+            const canonical = pickCanonicalLlsmExperimental(prev) || pickCanonicalLlsmExperimental(newFiles);
+            const normalizedNewFiles = canonical
+                ? newFiles.map(file => {
+                    if (file.sourceType !== 'llsm') return file;
+                    return {
+                        ...file,
+                        llsmExperimental: cloneLlsmExperimental(canonical),
+                    };
+                })
+                : newFiles;
+            const added = [...prev, ...normalizedNewFiles];
             if (!activeFileId && added.length > 0) {
                 setActiveFileId(added[0].id);
             }
@@ -78,22 +98,34 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
         llsmExperimental?: LlsmExperimentalSettings | null,
         llsmVoicingMode: LlsmVoicingMode = 'preserve',
     ) => {
-        setFiles(prev => prev.map(f => {
-            if (f.id !== id) return f;
-            return {
-                ...f,
-                frqData,
-                originalFrqData: frqData,
-                frqFile,
-                sourceType,
-                llsmExperimental: sourceType === 'llsm' ? (llsmExperimental ?? null) : undefined,
-                originalLlsmExperimental: sourceType === 'llsm' ? (llsmExperimental ?? null) : undefined,
-                llsmVoicingMode: sourceType === 'llsm' ? llsmVoicingMode : undefined,
-                history: [],
-                redoStack: [],
-                isModified: false,
-            };
-        }));
+        setFiles(prev => {
+            const canonicalFromOthers = prev.find(f =>
+                f.id !== id && f.sourceType === 'llsm' && f.llsmExperimental,
+            )?.llsmExperimental || null;
+            const effectiveExperimental = sourceType === 'llsm'
+                ? (canonicalFromOthers
+                    ? cloneLlsmExperimental(canonicalFromOthers)
+                    : (llsmExperimental ? cloneLlsmExperimental(llsmExperimental) : null))
+                : undefined;
+            return prev.map(f => {
+                if (f.id !== id) return f;
+                return {
+                    ...f,
+                    frqData,
+                    originalFrqData: frqData,
+                    frqFile,
+                    sourceType,
+                    llsmExperimental: effectiveExperimental,
+                    originalLlsmExperimental: sourceType === 'llsm'
+                        ? (llsmExperimental ? cloneLlsmExperimental(llsmExperimental) : null)
+                        : undefined,
+                    llsmVoicingMode: sourceType === 'llsm' ? llsmVoicingMode : undefined,
+                    history: [],
+                    redoStack: [],
+                    isModified: false,
+                };
+            });
+        });
     };
 
     // Reset FRQ data to original loaded state
@@ -135,17 +167,19 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const updateLlsmExperimental = (id: string, settings: LlsmExperimentalSettings) => {
-        setFiles(prev =>
-            prev.map(f => {
-                if (f.id !== id) return f;
+        const nextSettings = cloneLlsmExperimental(settings);
+        setFiles(prev => {
+            const target = prev.find(x => x.id === id);
+            if (!target || target.sourceType !== 'llsm') return prev;
+            return prev.map(f => {
                 if (f.sourceType !== 'llsm') return f;
                 return {
                     ...f,
-                    llsmExperimental: settings,
+                    llsmExperimental: cloneLlsmExperimental(nextSettings),
                     isModified: true,
                 };
-            }),
-        );
+            });
+        });
     };
 
     const updateLlsmVoicingMode = (id: string, mode: LlsmVoicingMode) => {

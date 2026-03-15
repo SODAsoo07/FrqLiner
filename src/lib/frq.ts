@@ -36,6 +36,18 @@ export interface LlsmExperimentalSettings {
 
 export type LlsmVoicingMode = 'preserve' | 'edge-extend' | 'full';
 
+export const LLSM_EXPERIMENTAL_INPUT_LIMITS = {
+    _9: { min: 13000, max: 17000, step: 1 },
+    _a: { min: 11000, max: 15000, step: 1 },
+    _b: { min: 22000, max: 26000, step: 1 },
+    _13: [
+        { min: 2500, max: 3500 },
+        { min: 5000, max: 7000 },
+        { min: 10000, max: 13000 },
+    ],
+    _13Fallback: { min: 1000, max: 20000 },
+} as const;
+
 interface WriteLlsmOptions {
     experimentalSettings?: LlsmExperimentalSettings | null;
     voicingMode?: LlsmVoicingMode;
@@ -479,6 +491,8 @@ const isWithinFactorRange = (value: number, reference: number, minFactor = 0.25,
     return value >= reference * minFactor && value <= reference * maxFactor;
 };
 
+const isWithinRange = (value: number, min: number, max: number) => value >= min && value <= max;
+
 export function sanitizeLlsmExperimentalSettings(
     candidate: Partial<LlsmExperimentalSettings>,
     existing13Length?: number,
@@ -509,17 +523,33 @@ export function sanitizeLlsmExperimentalSettingsForPatch(
     if (!sanitized) return null;
 
     const upperBand = sanitized._13[sanitized._13.length - 1];
-    if (!(sanitized._a >= upperBand)) return null;
-    if (!(sanitized._b >= upperBand)) return null;
-    if (!(sanitized._b >= sanitized._a)) return null;
+    // Keep a safety margin between band edges and related upper bounds.
+    if (!(sanitized._a > upperBand * 1.01)) return null;
+    if (!(sanitized._b > upperBand * 1.01)) return null;
+    if (!(sanitized._b > sanitized._a * 1.01)) return null;
     if (!(sanitized._9 >= sanitized._a)) return null;
 
-    if (!isWithinFactorRange(sanitized._9, baseline._9)) return null;
-    if (!isWithinFactorRange(sanitized._a, baseline._a)) return null;
-    if (!isWithinFactorRange(sanitized._b, baseline._b)) return null;
+    // Hard input limits around the tested-safe profile.
+    if (!isWithinRange(sanitized._9, LLSM_EXPERIMENTAL_INPUT_LIMITS._9.min, LLSM_EXPERIMENTAL_INPUT_LIMITS._9.max)) return null;
+    if (!isWithinRange(sanitized._a, LLSM_EXPERIMENTAL_INPUT_LIMITS._a.min, LLSM_EXPERIMENTAL_INPUT_LIMITS._a.max)) return null;
+    if (!isWithinRange(sanitized._b, LLSM_EXPERIMENTAL_INPUT_LIMITS._b.min, LLSM_EXPERIMENTAL_INPUT_LIMITS._b.max)) return null;
+
+    // Conservative bounds to reduce renderer instability from aggressive edits.
+    if (!isWithinFactorRange(sanitized._9, baseline._9, 0.85, 1.2)) return null;
+    if (!isWithinFactorRange(sanitized._a, baseline._a, 0.85, 1.2)) return null;
+    if (!isWithinFactorRange(sanitized._b, baseline._b, 0.85, 1.2)) return null;
 
     for (let i = 0; i < sanitized._13.length; i++) {
-        if (!isWithinFactorRange(sanitized._13[i], baseline._13[i])) return null;
+        const fixedBand = LLSM_EXPERIMENTAL_INPUT_LIMITS._13[i];
+        if (fixedBand) {
+            if (!isWithinRange(sanitized._13[i], fixedBand.min, fixedBand.max)) return null;
+        } else if (!isWithinRange(
+            sanitized._13[i],
+            LLSM_EXPERIMENTAL_INPUT_LIMITS._13Fallback.min,
+            LLSM_EXPERIMENTAL_INPUT_LIMITS._13Fallback.max,
+        )) return null;
+        if (!isWithinFactorRange(sanitized._13[i], baseline._13[i], 0.9, 1.15)) return null;
+        if (i > 0 && !(sanitized._13[i] - sanitized._13[i - 1] >= 50)) return null;
     }
 
     return sanitized;

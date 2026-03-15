@@ -29,8 +29,19 @@ const btnStyle = (color: string, disabled = false): React.CSSProperties => ({
     whiteSpace: 'nowrap',
 });
 
+const experimentalSignature = (settings?: LlsmExperimentalSettings | null) => {
+    if (!settings) return 'none';
+    const fixed = (v: number) => Number(v.toFixed(3));
+    return JSON.stringify({
+        _9: fixed(settings._9),
+        _a: fixed(settings._a),
+        _b: fixed(settings._b),
+        _13: settings._13.map(fixed),
+    });
+};
+
 export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () => void; isSidebarOpen: boolean }) => {
-    const { files, addFiles, updateWavFile, importFrqToEntry, clearFiles, updateFrqData } = useFrqContext();
+    const { files, activeFileId, addFiles, updateWavFile, importFrqToEntry, clearFiles, updateFrqData } = useFrqContext();
     const { language, setLanguage, t } = useLanguage();
     const frqInputRef = useRef<HTMLInputElement>(null);
     const wavInputRef = useRef<HTMLInputElement>(null);
@@ -320,6 +331,19 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
         if (files.length === 0) return;
         const exportableFiles = files.filter(entry => entry.frqData.frames.length > 0);
         if (exportableFiles.length === 0) return;
+        const exportableLlsm = exportableFiles.filter(entry => entry.sourceType === 'llsm');
+        const exportableSignatures = new Set(exportableLlsm.map(entry => experimentalSignature(entry.llsmExperimental)));
+        const hasMismatchInExport = exportableSignatures.size > 1;
+        const active = files.find(file => file.id === activeFileId) || null;
+        const activeLlsm = active && active.sourceType === 'llsm' ? active : null;
+        const normalizedExperimentalSettings =
+            activeLlsm?.llsmExperimental
+            ?? exportableLlsm.find(entry => entry.llsmExperimental)?.llsmExperimental
+            ?? null;
+
+        if (hasMismatchInExport) {
+            window.alert(t('experimentalMismatchNormalized'));
+        }
 
         const zip = new JSZip();
         for (const entry of exportableFiles) {
@@ -332,7 +356,9 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                     ? entry.frqFile.name
                     : `${entry.frqFile.name}.llsm`;
                 zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, {
-                    experimentalSettings: entry.llsmExperimental,
+                    experimentalSettings: hasMismatchInExport
+                        ? normalizedExperimentalSettings
+                        : entry.llsmExperimental,
                     voicingMode: entry.llsmVoicingMode,
                 }));
             } else {
@@ -351,9 +377,38 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
         URL.revokeObjectURL(url);
     };
 
+    const handleDownloadCurrent = async () => {
+        const active = files.find(file => file.id === activeFileId);
+        if (!active || active.frqData.frames.length === 0) return;
+
+        const payload = active.sourceType === 'llsm'
+            ? writeLlsm(await active.frqFile.arrayBuffer(), active.frqData, {
+                experimentalSettings: active.llsmExperimental,
+                voicingMode: active.llsmVoicingMode,
+            })
+            : writeFrq(active.frqData);
+        const downloadName = active.sourceType === 'llsm'
+            ? (/\.(llsm)$/i.test(active.frqFile.name) ? active.frqFile.name : `${active.name}.llsm`)
+            : active.name;
+        const blob = new Blob([payload], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = downloadName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
     const modifiedCount = files.filter(file => file.isModified).length;
     const wavCount = files.filter(file => file.wavFile).length;
     const exportableCount = files.filter(file => file.frqData.frames.length > 0).length;
+    const activeFile = files.find(file => file.id === activeFileId) || null;
+    const canDownloadCurrent = Boolean(activeFile && activeFile.frqData.frames.length > 0);
+    const llsmFiles = files.filter(file => file.sourceType === 'llsm');
+    const llsmSignatures = new Set(llsmFiles.map(file => experimentalSignature(file.llsmExperimental)));
+    const hasExperimentalMismatch = llsmSignatures.size > 1;
 
     return (
         <div style={{ display: 'flex', gap: '6px', padding: '8px 12px', borderBottom: '1px solid #ccc', background: '#f8f9fa', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -384,6 +439,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             {files.length > 0 && (
                 <span style={{ fontSize: '13px', color: '#495057', background: '#e9ecef', padding: '4px 10px', borderRadius: '4px' }}>
                     {t('fileStats', { count: files.length })}
+                    {hasExperimentalMismatch && <span style={{ color: '#7c2d12' }}> · {t('experimentalMismatch')}</span>}
                     {wavCount > 0 && <> · {t('wavStats', { count: wavCount })}</>}
                     {modifiedCount > 0 && <span style={{ color: '#dc3545' }}> · {t('modifiedStats', { count: modifiedCount })}</span>}
                 </span>
@@ -450,6 +506,9 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
 
             <button onClick={handleDownloadAll} disabled={exportableCount === 0} style={btnStyle('#198754', exportableCount === 0)}>
                 {t('downloadZip')}
+            </button>
+            <button onClick={handleDownloadCurrent} disabled={!canDownloadCurrent} style={btnStyle('#0f766e', !canDownloadCurrent)}>
+                {t('downloadCurrent')}
             </button>
 
             <button onClick={clearFiles} disabled={files.length === 0} style={btnStyle('#dc3545', files.length === 0)}>
