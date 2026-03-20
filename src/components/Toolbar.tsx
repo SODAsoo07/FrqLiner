@@ -47,6 +47,8 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
     const wavInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
     const [generatingPct, setGeneratingPct] = useState<number | null>(null);
+    const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+    const [isDownloadingCurrent, setIsDownloadingCurrent] = useState(false);
 
     const processFiles = async (fileList: File[]) => {
         const normalizePath = (value: string) => value.replace(/\\/g, '/');
@@ -328,9 +330,11 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
     };
 
     const handleDownloadAll = async () => {
+        if (isDownloadingZip) return;
         if (files.length === 0) return;
         const exportableFiles = files.filter(entry => entry.frqData.frames.length > 0);
         if (exportableFiles.length === 0) return;
+        setIsDownloadingZip(true);
         const exportableLlsm = exportableFiles.filter(entry => entry.sourceType === 'llsm');
         const exportableSignatures = new Set(exportableLlsm.map(entry => experimentalSignature(entry.llsmExperimental)));
         const hasMismatchInExport = exportableSignatures.size > 1;
@@ -345,67 +349,77 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             window.alert(t('experimentalMismatchNormalized'));
         }
 
-        const zip = new JSZip();
-        for (const entry of exportableFiles) {
-            if (entry.sourceType === 'llsm') {
-                const baseBuffer = await entry.frqFile.arrayBuffer();
-                const normalizedPath = entry.path.replace(/\\/g, '/');
-                const lastSlash = normalizedPath.lastIndexOf('/');
-                const dir = lastSlash >= 0 ? normalizedPath.slice(0, lastSlash + 1) : '';
-                const llsmName = /\.llsm$/i.test(entry.frqFile.name)
-                    ? entry.frqFile.name
-                    : `${entry.frqFile.name}.llsm`;
-                zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, {
-                    experimentalSettings: hasMismatchInExport
-                        ? normalizedExperimentalSettings
-                        : entry.llsmExperimental,
-                    voicingMode: entry.llsmVoicingMode,
-                }));
-            } else {
-                zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+        try {
+            const zip = new JSZip();
+            for (const entry of exportableFiles) {
+                if (entry.sourceType === 'llsm') {
+                    const baseBuffer = await entry.frqFile.arrayBuffer();
+                    const normalizedPath = entry.path.replace(/\\/g, '/');
+                    const lastSlash = normalizedPath.lastIndexOf('/');
+                    const dir = lastSlash >= 0 ? normalizedPath.slice(0, lastSlash + 1) : '';
+                    const llsmName = /\.llsm$/i.test(entry.frqFile.name)
+                        ? entry.frqFile.name
+                        : `${entry.frqFile.name}.llsm`;
+                    zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, {
+                        experimentalSettings: hasMismatchInExport
+                            ? normalizedExperimentalSettings
+                            : entry.llsmExperimental,
+                        voicingMode: entry.llsmVoicingMode,
+                    }));
+                } else {
+                    zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+                }
             }
-        }
 
-        const blob = await zip.generateAsync({ type: 'blob' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'edited_frq_files.zip';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+            const blob = await zip.generateAsync({ type: 'blob' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'edited_frq_files.zip';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } finally {
+            setIsDownloadingZip(false);
+        }
     };
 
     const handleDownloadCurrent = async () => {
+        if (isDownloadingCurrent) return;
         const active = files.find(file => file.id === activeFileId);
         if (!active || active.frqData.frames.length === 0) return;
+        setIsDownloadingCurrent(true);
 
-        const payload = active.sourceType === 'llsm'
-            ? writeLlsm(await active.frqFile.arrayBuffer(), active.frqData, {
-                experimentalSettings: active.llsmExperimental,
-                voicingMode: active.llsmVoicingMode,
-            })
-            : writeFrq(active.frqData);
-        const downloadName = active.sourceType === 'llsm'
-            ? (/\.(llsm)$/i.test(active.frqFile.name) ? active.frqFile.name : `${active.name}.llsm`)
-            : active.name;
-        const blob = new Blob([payload], { type: 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = downloadName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        try {
+            const payload = active.sourceType === 'llsm'
+                ? writeLlsm(await active.frqFile.arrayBuffer(), active.frqData, {
+                    experimentalSettings: active.llsmExperimental,
+                    voicingMode: active.llsmVoicingMode,
+                })
+                : writeFrq(active.frqData);
+            const downloadName = active.sourceType === 'llsm'
+                ? (/\.(llsm)$/i.test(active.frqFile.name) ? active.frqFile.name : `${active.name}.llsm`)
+                : active.name;
+            const blob = new Blob([payload], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = downloadName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } finally {
+            setIsDownloadingCurrent(false);
+        }
     };
 
     const modifiedCount = files.filter(file => file.isModified).length;
     const wavCount = files.filter(file => file.wavFile).length;
-    const exportableCount = files.filter(file => file.frqData.frames.length > 0).length;
+    const hasFiles = files.length > 0;
     const activeFile = files.find(file => file.id === activeFileId) || null;
-    const canDownloadCurrent = Boolean(activeFile && activeFile.frqData.frames.length > 0);
+    const canDownloadCurrent = Boolean(activeFile) && !isDownloadingCurrent;
     const llsmFiles = files.filter(file => file.sourceType === 'llsm');
     const llsmSignatures = new Set(llsmFiles.map(file => experimentalSignature(file.llsmExperimental)));
     const hasExperimentalMismatch = llsmSignatures.size > 1;
@@ -504,7 +518,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 {generatingPct !== null ? `${t('autoGenerate')} ${generatingPct}%` : t('autoGenerate')}
             </button>
 
-            <button onClick={handleDownloadAll} disabled={exportableCount === 0} style={btnStyle('#198754', exportableCount === 0)}>
+            <button onClick={handleDownloadAll} disabled={!hasFiles || isDownloadingZip} style={btnStyle('#198754', !hasFiles || isDownloadingZip)}>
                 {t('downloadZip')}
             </button>
             <button onClick={handleDownloadCurrent} disabled={!canDownloadCurrent} style={btnStyle('#0f766e', !canDownloadCurrent)}>
