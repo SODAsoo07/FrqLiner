@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import JSZip from 'jszip';
 import { useFrqContext, type FrqFileEntry } from './FrqContext';
 import { useLanguage } from './LanguageContext';
@@ -17,6 +17,7 @@ import {
 } from '../lib/frq';
 import { normalizeFrqPath } from '../lib/filePath';
 import { generateBasicF0 } from '../lib/pitchTracker';
+import { downloadBlobWithFallback } from '../lib/browserDownload';
 
 const btnStyle = (color: string, disabled = false): React.CSSProperties => ({
     padding: '6px 14px',
@@ -40,6 +41,17 @@ const experimentalSignature = (settings?: LlsmExperimentalSettings | null) => {
     });
 };
 
+const errorMessage = (error: unknown) => {
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === 'string' && error.trim().length > 0) return error;
+    return 'Unknown error';
+};
+
+interface ManualDownloadLink {
+    url: string;
+    fileName: string;
+}
+
 export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () => void; isSidebarOpen: boolean }) => {
     const { files, activeFileId, addFiles, updateWavFile, importFrqToEntry, clearFiles, updateFrqData } = useFrqContext();
     const { language, setLanguage, t } = useLanguage();
@@ -51,6 +63,45 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
     const [generatingPct, setGeneratingPct] = useState<number | null>(null);
     const [isDownloadingZip, setIsDownloadingZip] = useState(false);
     const [isDownloadingCurrent, setIsDownloadingCurrent] = useState(false);
+    const [isPreparingManualLinks, setIsPreparingManualLinks] = useState(false);
+    const [manualLinksOpen, setManualLinksOpen] = useState(false);
+    const [manualError, setManualError] = useState<string | null>(null);
+    const [manualZipLink, setManualZipLink] = useState<ManualDownloadLink | null>(null);
+    const [manualCurrentLink, setManualCurrentLink] = useState<ManualDownloadLink | null>(null);
+    const manualZipUrlRef = useRef<string | null>(null);
+    const manualCurrentUrlRef = useRef<string | null>(null);
+
+    const revokeManualZipUrl = () => {
+        if (manualZipUrlRef.current) {
+            URL.revokeObjectURL(manualZipUrlRef.current);
+            manualZipUrlRef.current = null;
+        }
+    };
+    const revokeManualCurrentUrl = () => {
+        if (manualCurrentUrlRef.current) {
+            URL.revokeObjectURL(manualCurrentUrlRef.current);
+            manualCurrentUrlRef.current = null;
+        }
+    };
+    const updateManualZipLink = (next: ManualDownloadLink | null) => {
+        revokeManualZipUrl();
+        manualZipUrlRef.current = next?.url ?? null;
+        setManualZipLink(next);
+    };
+    const updateManualCurrentLink = (next: ManualDownloadLink | null) => {
+        revokeManualCurrentUrl();
+        manualCurrentUrlRef.current = next?.url ?? null;
+        setManualCurrentLink(next);
+    };
+    const clearManualLinks = () => {
+        updateManualZipLink(null);
+        updateManualCurrentLink(null);
+    };
+
+    useEffect(() => () => {
+        revokeManualZipUrl();
+        revokeManualCurrentUrl();
+    }, []);
 
     const processFiles = async (fileList: File[]) => {
         const normalizePath = (value: string) => value.replace(/\\/g, '/');
@@ -378,17 +429,14 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             }
 
             const blob = await zip.generateAsync({ type: 'blob' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = 'edited_frq_files.zip';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            setTimeout(() => URL.revokeObjectURL(url), 0);
+            downloadBlobWithFallback(blob, 'edited_frq_files.zip', {
+                hint: t('downloadFallbackHint'),
+                action: t('downloadFallbackAction'),
+                close: t('close'),
+            });
         } catch (error) {
             console.error('ZIP export failed', error);
-            window.alert(t('downloadFailed'));
+            window.alert(`${t('downloadFailed')}\n${errorMessage(error)}`);
         } finally {
             zipDownloadLockRef.current = false;
             setIsDownloadingZip(false);
@@ -416,20 +464,97 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 ? (/\.(llsm)$/i.test(active.frqFile.name) ? active.frqFile.name : `${active.name}.llsm`)
                 : active.name;
             const blob = new Blob([payload], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = downloadName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            setTimeout(() => URL.revokeObjectURL(url), 0);
+            downloadBlobWithFallback(blob, downloadName, {
+                hint: t('downloadFallbackHint'),
+                action: t('downloadFallbackAction'),
+                close: t('close'),
+            });
         } catch (error) {
             console.error('Single download failed', error);
-            window.alert(t('downloadFailed'));
+            window.alert(`${t('downloadFailed')}\n${errorMessage(error)}`);
         } finally {
             currentDownloadLockRef.current = false;
             setIsDownloadingCurrent(false);
+        }
+    };
+
+    const handlePrepareManualLinks = async () => {
+        if (isPreparingManualLinks) return;
+        setManualLinksOpen(true);
+        setManualError(null);
+        setIsPreparingManualLinks(true);
+        try {
+            let nextZipLink: ManualDownloadLink | null = null;
+            let nextCurrentLink: ManualDownloadLink | null = null;
+
+            const exportableFiles = files.filter(entry => entry.frqData.frames.length > 0);
+            if (exportableFiles.length > 0) {
+                const exportableLlsm = exportableFiles.filter(entry => entry.sourceType === 'llsm');
+                const exportableSignatures = new Set(exportableLlsm.map(entry => experimentalSignature(entry.llsmExperimental)));
+                const hasMismatchInExport = exportableSignatures.size > 1;
+                const active = files.find(file => file.id === activeFileId) || null;
+                const activeLlsm = active && active.sourceType === 'llsm' ? active : null;
+                const normalizedExperimentalSettings =
+                    activeLlsm?.llsmExperimental
+                    ?? exportableLlsm.find(entry => entry.llsmExperimental)?.llsmExperimental
+                    ?? null;
+
+                const zip = new JSZip();
+                for (const entry of exportableFiles) {
+                    if (entry.sourceType === 'llsm') {
+                        const baseBuffer = await entry.frqFile.arrayBuffer();
+                        const normalizedPath = entry.path.replace(/\\/g, '/');
+                        const lastSlash = normalizedPath.lastIndexOf('/');
+                        const dir = lastSlash >= 0 ? normalizedPath.slice(0, lastSlash + 1) : '';
+                        const llsmName = /\.llsm$/i.test(entry.frqFile.name)
+                            ? entry.frqFile.name
+                            : `${entry.frqFile.name}.llsm`;
+                        zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, {
+                            experimentalSettings: hasMismatchInExport
+                                ? normalizedExperimentalSettings
+                                : entry.llsmExperimental,
+                            voicingMode: entry.llsmVoicingMode,
+                        }));
+                    } else {
+                        zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+                    }
+                }
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                nextZipLink = {
+                    url: URL.createObjectURL(zipBlob),
+                    fileName: 'edited_frq_files.zip',
+                };
+            }
+
+            const active = files.find(file => file.id === activeFileId);
+            if (active && active.frqData.frames.length > 0) {
+                const payload = active.sourceType === 'llsm'
+                    ? writeLlsm(await active.frqFile.arrayBuffer(), active.frqData, {
+                        experimentalSettings: active.llsmExperimental,
+                        voicingMode: active.llsmVoicingMode,
+                    })
+                    : writeFrq(active.frqData);
+                const downloadName = active.sourceType === 'llsm'
+                    ? (/\.(llsm)$/i.test(active.frqFile.name) ? active.frqFile.name : `${active.name}.llsm`)
+                    : active.name;
+                const blob = new Blob([payload], { type: 'application/octet-stream' });
+                nextCurrentLink = {
+                    url: URL.createObjectURL(blob),
+                    fileName: downloadName,
+                };
+            }
+
+            updateManualZipLink(nextZipLink);
+            updateManualCurrentLink(nextCurrentLink);
+            if (!nextZipLink && !nextCurrentLink) {
+                setManualError(t('noExportableFiles'));
+            }
+        } catch (error) {
+            console.error('Manual download link preparation failed', error);
+            clearManualLinks();
+            setManualError(`${t('downloadFailed')}\n${errorMessage(error)}`);
+        } finally {
+            setIsPreparingManualLinks(false);
         }
     };
 
@@ -542,10 +667,49 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             <button onClick={handleDownloadCurrent} disabled={!canDownloadCurrent} style={btnStyle('#0f766e', !canDownloadCurrent)}>
                 {t('downloadCurrent')}
             </button>
+            <button onClick={() => void handlePrepareManualLinks()} disabled={isPreparingManualLinks} style={btnStyle('#334155', isPreparingManualLinks)}>
+                {isPreparingManualLinks ? t('manualPreparing') : t('manualDownload')}
+            </button>
 
             <button onClick={clearFiles} disabled={files.length === 0} style={btnStyle('#dc3545', files.length === 0)}>
                 {t('clear')}
             </button>
+
+            {manualLinksOpen && (
+                <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px', background: '#f8fafc' }}>
+                    <strong style={{ fontSize: '12px', color: '#1f2937' }}>{t('manualLinksTitle')}</strong>
+                    {isPreparingManualLinks && <span style={{ fontSize: '12px', color: '#475569' }}>{t('manualPreparing')}</span>}
+                    {!isPreparingManualLinks && manualZipLink && (
+                        <a href={manualZipLink.url} download={manualZipLink.fileName} style={{ fontSize: '12px', color: '#1d4ed8', fontWeight: 600 }}>
+                            {t('manualZipLink')}
+                        </a>
+                    )}
+                    {!isPreparingManualLinks && manualCurrentLink && (
+                        <a href={manualCurrentLink.url} download={manualCurrentLink.fileName} style={{ fontSize: '12px', color: '#0f766e', fontWeight: 600 }}>
+                            {t('manualCurrentLink')}
+                        </a>
+                    )}
+                    {!isPreparingManualLinks && !manualZipLink && !manualCurrentLink && !manualError && (
+                        <span style={{ fontSize: '12px', color: '#64748b' }}>{t('manualNoLinks')}</span>
+                    )}
+                    {manualError && (
+                        <span style={{ fontSize: '12px', color: '#b91c1c', whiteSpace: 'pre-line' }}>{manualError}</span>
+                    )}
+                    <button onClick={() => void handlePrepareManualLinks()} disabled={isPreparingManualLinks} style={btnStyle('#64748b', isPreparingManualLinks)}>
+                        {t('manualRefresh')}
+                    </button>
+                    <button
+                        onClick={() => {
+                            setManualLinksOpen(false);
+                            setManualError(null);
+                            clearManualLinks();
+                        }}
+                        style={btnStyle('#94a3b8')}
+                    >
+                        {t('close')}
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

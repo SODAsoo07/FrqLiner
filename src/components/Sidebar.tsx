@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useFrqContext, type FrqFileEntry } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import { writeFrq, writeLlsm } from '../lib/frq';
+import { downloadBlobWithFallback } from '../lib/browserDownload';
 
 interface TreeNode {
     name: string;
@@ -9,6 +10,12 @@ interface TreeNode {
     children: Record<string, TreeNode>;
     file?: FrqFileEntry;
 }
+
+const errorMessage = (error: unknown) => {
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === 'string' && error.trim().length > 0) return error;
+    return 'Unknown error';
+};
 
 const buildTree = (files: FrqFileEntry[]) => {
     const root: TreeNode = { name: 'root', path: '', children: {} };
@@ -48,17 +55,14 @@ const downloadEntry = async (entry: FrqFileEntry, t: (key: string) => string) =>
             ? (/\.(llsm)$/i.test(entry.frqFile.name) ? entry.frqFile.name : `${entry.name}.llsm`)
             : entry.name;
         const blob = new Blob([payload], { type: 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = downloadName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(url), 0);
+        downloadBlobWithFallback(blob, downloadName, {
+            hint: t('downloadFallbackHint'),
+            action: t('downloadFallbackAction'),
+            close: t('close'),
+        });
     } catch (error) {
         console.error('Sidebar download failed', error);
-        window.alert(t('downloadFailed'));
+        window.alert(`${t('downloadFailed')}\n${errorMessage(error)}`);
     }
 };
 
