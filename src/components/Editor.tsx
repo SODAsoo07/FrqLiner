@@ -2,7 +2,13 @@ import { useRef, useEffect, useState, useCallback, type MouseEvent } from 'react
 import { useFrqContext } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import Meyda from 'meyda';
-import type { FrqFrame } from '../lib/frq';
+import {
+    LLSM_EXPERIMENTAL_INPUT_LIMITS,
+    sanitizeLlsmExperimentalSettingsForPatch,
+    type FrqFrame,
+    type LlsmExperimentalSettings,
+    type LlsmVoicingMode,
+} from '../lib/frq';
 import { autoCorrectFrq } from '../lib/frqAutoCorrect';
 
 // ──────────────────────────────────────────────
@@ -19,6 +25,7 @@ const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSi
     default: { bufferSize: 2048, hopSize: 256, visibleBins: 120, gain: 32 },
     high: { bufferSize: 4096, hopSize: 128, visibleBins: 192, gain: 36 },
 };
+const EXPERIMENTAL_LIMITS = LLSM_EXPERIMENTAL_INPUT_LIMITS;
 
 const LOG_MIN_FREQ = Math.log(MIN_FREQ);
 const LOG_VISUAL_MAX_FREQ = Math.log(VISUAL_MAX_FREQ);
@@ -88,7 +95,7 @@ const formatPitch = (f0: number) => {
 // Component
 // ──────────────────────────────────────────────
 const Editor = () => {
-    const { files, activeFileId, updateFrqData, resetFrqData, undo, redo } = useFrqContext();
+    const { files, activeFileId, updateFrqData, updateLlsmExperimental, updateLlsmVoicingMode, resetFrqData, undo, redo } = useFrqContext();
     const { t } = useLanguage();
     const activeFile = files.find(f => f.id === activeFileId);
 
@@ -120,6 +127,13 @@ const Editor = () => {
     const [showSpectrogram, setShowSpectrogram] = useState(true);
     const [globalSpectrogramQuality, setGlobalSpectrogramQuality] = useState<SpectrogramQuality>('low');
     const [fileSpectrogramQualities, setFileSpectrogramQualities] = useState<Record<string, SpectrogramQuality>>({});
+    const [editorTab, setEditorTab] = useState<'pitch' | 'experimental'>('pitch');
+    const [llsmNumericInputs, setLlsmNumericInputs] = useState<{ _9: string; _a: string; _b: string }>({
+        _9: '',
+        _a: '',
+        _b: '',
+    });
+    const [llsm13Input, setLlsm13Input] = useState<string>('');
 
     // Storing decoded audio as STATE so renders are triggered
     const [waveformData, setWaveformData] = useState<Float32Array | null>(null);
@@ -141,6 +155,8 @@ const Editor = () => {
         setHoverPitch(null);
         dragStartFrqRef.current = null;
         dragDraftFrqRef.current = null;
+        setEditorTab('pitch');
+        setLlsmNumericInputs({ _9: '', _a: '', _b: '' });
 
         if (audioRef.current) {
             audioRef.current.pause();
@@ -175,6 +191,31 @@ const Editor = () => {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeFileId]);
+
+    useEffect(() => {
+        if (!activeFile || activeFile.sourceType !== 'llsm') {
+            setLlsmNumericInputs({ _9: '', _a: '', _b: '' });
+            setLlsm13Input('');
+            return;
+        }
+        const current = activeFile.llsmExperimental;
+        if (current) {
+            setLlsmNumericInputs({
+                _9: Number(current._9.toFixed(6)).toString(),
+                _a: Number(current._a.toFixed(6)).toString(),
+                _b: Number(current._b.toFixed(6)).toString(),
+            });
+        }
+        const values = activeFile.llsmExperimental?._13 ?? [];
+        setLlsm13Input(values.map(v => Number(v.toFixed(6))).join(', '));
+    }, [
+        activeFile?.id,
+        activeFile?.sourceType,
+        activeFile?.llsmExperimental?._9,
+        activeFile?.llsmExperimental?._a,
+        activeFile?.llsmExperimental?._b,
+        activeFile?.llsmExperimental?._13,
+    ]);
 
     useEffect(() => {
         setFileSpectrogramQualities(prev => {
@@ -687,6 +728,70 @@ const Editor = () => {
         }
     };
 
+    const updateExperimentalField = (field: '_9' | '_a' | '_b', value: number) => {
+        if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
+        const limits = EXPERIMENTAL_LIMITS[field];
+        if (value < limits.min || value > limits.max) {
+            window.alert(t('experimentalUnsafe'));
+            return;
+        }
+        const current = activeFile.llsmExperimental;
+        const baseline = activeFile.originalLlsmExperimental ?? current;
+        const next: LlsmExperimentalSettings = {
+            ...current,
+            [field]: value,
+        };
+        const sanitized = sanitizeLlsmExperimentalSettingsForPatch(next, baseline);
+        if (!sanitized) {
+            window.alert(t('experimentalUnsafe'));
+            return;
+        }
+        updateLlsmExperimental(activeFile.id, sanitized);
+    };
+
+    const applyExperimentalNumericField = (field: '_9' | '_a' | '_b') => {
+        if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
+        const raw = llsmNumericInputs[field].trim();
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed)) {
+            window.alert(t('experimentalUnsafe'));
+            setLlsmNumericInputs(prev => ({
+                ...prev,
+                [field]: Number(activeFile.llsmExperimental![field].toFixed(6)).toString(),
+            }));
+            return;
+        }
+        updateExperimentalField(field, parsed);
+    };
+
+    const applyExperimental13 = () => {
+        if (!activeFile || activeFile.sourceType !== 'llsm' || !activeFile.llsmExperimental) return;
+        const baseline = activeFile.originalLlsmExperimental ?? activeFile.llsmExperimental;
+        const parsed = llsm13Input
+            .split(',')
+            .map(v => Number(v.trim()))
+            .filter(v => Number.isFinite(v));
+        for (let i = 0; i < parsed.length; i++) {
+            const limits = EXPERIMENTAL_LIMITS._13[i] ?? EXPERIMENTAL_LIMITS._13Fallback;
+            if (parsed[i] < limits.min || parsed[i] > limits.max) {
+                window.alert(t('experimentalUnsafe'));
+                setLlsm13Input(activeFile.llsmExperimental._13.map(v => Number(v.toFixed(6))).join(', '));
+                return;
+            }
+        }
+        const sanitized = sanitizeLlsmExperimentalSettingsForPatch({
+            ...activeFile.llsmExperimental,
+            _13: parsed,
+            _12: parsed.length + 1,
+        }, baseline);
+        if (!sanitized) {
+            window.alert(t('experimentalUnsafe'));
+            setLlsm13Input(activeFile.llsmExperimental._13.map(v => Number(v.toFixed(6))).join(', '));
+            return;
+        }
+        updateLlsmExperimental(activeFile.id, sanitized);
+    };
+
     // ── Empty state ────────────────────────────
     if (!activeFile) {
         return (
@@ -704,6 +809,9 @@ const Editor = () => {
         activeFile.frqData.frames.length === 0;
     const expectedPitchInfo = formatPitch(activeFile.expectedF0 ?? 0);
     const hoverPitchInfo = formatPitch(hoverPitch ?? 0);
+    const isLlsmFile = activeFile.sourceType === 'llsm';
+    const llsmExperimental = activeFile.llsmExperimental ?? null;
+    const llsmVoicingMode: LlsmVoicingMode = activeFile.llsmVoicingMode ?? 'preserve';
     if (isWavOnly) {
         return (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', color: '#888', background: '#fafafa' }}>
@@ -734,12 +842,45 @@ const Editor = () => {
                 <strong style={{ fontSize: '13px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {activeFile.name}
                 </strong>
-                {activeFile.expectedF0 && (
+                {isLlsmFile && (
+                    <span style={{ display: 'inline-flex', border: '1px solid #ced4da', borderRadius: 6, overflow: 'hidden', marginRight: 4 }}>
+                        <button
+                            onClick={() => setEditorTab('pitch')}
+                            style={{
+                                border: 'none',
+                                borderRight: '1px solid #ced4da',
+                                background: editorTab === 'pitch' ? '#0d6efd' : '#fff',
+                                color: editorTab === 'pitch' ? '#fff' : '#495057',
+                                padding: '2px 8px',
+                                fontSize: 11,
+                                cursor: 'pointer',
+                                fontWeight: 600,
+                            }}
+                        >
+                            {t('pitchTab')}
+                        </button>
+                        <button
+                            onClick={() => setEditorTab('experimental')}
+                            style={{
+                                border: 'none',
+                                background: editorTab === 'experimental' ? '#7c3aed' : '#fff',
+                                color: editorTab === 'experimental' ? '#fff' : '#495057',
+                                padding: '2px 8px',
+                                fontSize: 11,
+                                cursor: 'pointer',
+                                fontWeight: 600,
+                            }}
+                        >
+                            {t('experimentalTab')}
+                        </button>
+                    </span>
+                )}
+                {(editorTab === 'pitch' || !isLlsmFile) && activeFile.expectedF0 && (
                     <span style={{ fontSize: '11px', background: '#e9ecef', padding: '1px 6px', borderRadius: 3 }}>
                         {expectedPitchInfo ? `${expectedPitchInfo.note} ${Math.round(activeFile.expectedF0)} Hz` : `${Math.round(activeFile.expectedF0)} Hz`}
                     </span>
                 )}
-                {hoverPitchInfo && (
+                {(editorTab === 'pitch' || !isLlsmFile) && hoverPitchInfo && (
                     <span style={{ fontSize: '11px', background: '#fff3bf', color: '#5f3b00', padding: '1px 6px', borderRadius: 3 }}>
                         {hoverPitchInfo.note} {hoverPitchInfo.cents} {hoverPitchInfo.hz}
                     </span>
@@ -753,59 +894,187 @@ const Editor = () => {
                         {t('wavMissing')}
                     </span>
                 )}
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
-                    <input
-                        type="checkbox"
-                        checked={showSpectrogram}
-                        onChange={e => setShowSpectrogram(e.target.checked)}
-                    />
-                    {t('spectrogram')}
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
-                    {t('global')}
-                    <select
-                        disabled={!showSpectrogram}
-                        value={globalSpectrogramQuality}
-                        onChange={e => {
-                            const nextQuality = e.target.value as SpectrogramQuality;
-                            setGlobalSpectrogramQuality(nextQuality);
-                            setFileSpectrogramQualities({});
-                        }}
-                        style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
-                    >
-                        <option value="low">{t('low')}</option>
-                        <option value="default">{t('default')}</option>
-                        <option value="high">{t('high')}</option>
-                    </select>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
-                    {t('thisFile')}
-                    <select
-                        disabled={!showSpectrogram}
-                        value={activeFile ? (fileSpectrogramQualities[activeFile.id] ?? '__global__') : '__global__'}
-                        onChange={e => {
-                            if (!activeFile) return;
-                            const nextValue = e.target.value;
-                            setFileSpectrogramQualities(prev => {
-                                if (nextValue === '__global__') {
-                                    const next = { ...prev };
-                                    delete next[activeFile.id];
-                                    return next;
-                                }
-                                return { ...prev, [activeFile.id]: nextValue as SpectrogramQuality };
-                            });
-                        }}
-                        style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
-                    >
-                        <option value="__global__">{t('useGlobal')}</option>
-                        <option value="low">{t('low')}</option>
-                        <option value="default">{t('default')}</option>
-                        <option value="high">{t('high')}</option>
-                    </select>
-                </label>
-                {showSpectrogram && activeFile.wavFile && !spectrogramData && (
+                {isLlsmFile && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#4c1d95', background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 4, padding: '1px 6px' }}>
+                        {t('voicingMode')}
+                        <select
+                            value={llsmVoicingMode}
+                            onChange={e => {
+                                if (!activeFile || activeFile.sourceType !== 'llsm') return;
+                                updateLlsmVoicingMode(activeFile.id, e.target.value as LlsmVoicingMode);
+                            }}
+                            style={{ fontSize: 11, padding: '1px 4px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff' }}
+                        >
+                            <option value="preserve">{t('voicingPreserve')}</option>
+                            <option value="edge-extend">{t('voicingEdgeExtend')}</option>
+                            <option value="full">{t('voicingFull')}</option>
+                        </select>
+                    </label>
+                )}
+                {(editorTab === 'pitch' || !isLlsmFile) && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
+                        <input
+                            type="checkbox"
+                            checked={showSpectrogram}
+                            onChange={e => setShowSpectrogram(e.target.checked)}
+                        />
+                        {t('spectrogram')}
+                    </label>
+                )}
+                {(editorTab === 'pitch' || !isLlsmFile) && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
+                        {t('global')}
+                        <select
+                            disabled={!showSpectrogram}
+                            value={globalSpectrogramQuality}
+                            onChange={e => {
+                                const nextQuality = e.target.value as SpectrogramQuality;
+                                setGlobalSpectrogramQuality(nextQuality);
+                                setFileSpectrogramQualities({});
+                            }}
+                            style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
+                        >
+                            <option value="low">{t('low')}</option>
+                            <option value="default">{t('default')}</option>
+                            <option value="high">{t('high')}</option>
+                        </select>
+                    </label>
+                )}
+                {(editorTab === 'pitch' || !isLlsmFile) && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#555' }}>
+                        {t('thisFile')}
+                        <select
+                            disabled={!showSpectrogram}
+                            value={activeFile ? (fileSpectrogramQualities[activeFile.id] ?? '__global__') : '__global__'}
+                            onChange={e => {
+                                if (!activeFile) return;
+                                const nextValue = e.target.value;
+                                setFileSpectrogramQualities(prev => {
+                                    if (nextValue === '__global__') {
+                                        const next = { ...prev };
+                                        delete next[activeFile.id];
+                                        return next;
+                                    }
+                                    return { ...prev, [activeFile.id]: nextValue as SpectrogramQuality };
+                                });
+                            }}
+                            style={{ fontSize: '11px', padding: '1px 4px', border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
+                        >
+                            <option value="__global__">{t('useGlobal')}</option>
+                            <option value="low">{t('low')}</option>
+                            <option value="default">{t('default')}</option>
+                            <option value="high">{t('high')}</option>
+                        </select>
+                    </label>
+                )}
+                {(editorTab === 'pitch' || !isLlsmFile) && showSpectrogram && activeFile.wavFile && !spectrogramData && (
                     <span style={{ fontSize: '11px', color: '#8a6d3b', background: '#fff3cd', padding: '1px 6px', borderRadius: 3 }}>
                         {t('loadingSpectrogram')}
+                    </span>
+                )}
+                {isLlsmFile && editorTab === 'experimental' && llsmExperimental && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '4px 8px', border: '1px solid #d8b4fe', borderRadius: 6, background: '#faf5ff', maxWidth: '100%' }}>
+                        <span style={{ fontSize: 11, color: '#6b21a8', fontWeight: 700 }}>{t('experimentalWarning')}</span>
+                        <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            {t('voicingMode')}
+                            <select
+                                value={llsmVoicingMode}
+                                onChange={e => {
+                                    if (!activeFile || activeFile.sourceType !== 'llsm') return;
+                                    updateLlsmVoicingMode(activeFile.id, e.target.value as LlsmVoicingMode);
+                                }}
+                                style={{ fontSize: 11, padding: '1px 4px', border: '1px solid #7c3aed', borderRadius: 4, background: '#fff' }}
+                            >
+                                <option value="preserve">{t('voicingPreserve')}</option>
+                                <option value="edge-extend">{t('voicingEdgeExtend')}</option>
+                                <option value="full">{t('voicingFull')}</option>
+                            </select>
+                        </label>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('voicingModeDesc')}</span>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('llsmExpRange')}</span>
+                        <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            `_9`
+                            <input
+                                type="number"
+                                step={EXPERIMENTAL_LIMITS._9.step}
+                                min={EXPERIMENTAL_LIMITS._9.min}
+                                max={EXPERIMENTAL_LIMITS._9.max}
+                                value={llsmNumericInputs._9}
+                                onChange={e => setLlsmNumericInputs(prev => ({ ...prev, _9: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimentalNumericField('_9');
+                                }}
+                                style={{ width: 82, fontSize: 11, padding: '1px 4px' }}
+                            />
+                        </label>
+                        <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            `_a`
+                            <input
+                                type="number"
+                                step={EXPERIMENTAL_LIMITS._a.step}
+                                min={EXPERIMENTAL_LIMITS._a.min}
+                                max={EXPERIMENTAL_LIMITS._a.max}
+                                value={llsmNumericInputs._a}
+                                onChange={e => setLlsmNumericInputs(prev => ({ ...prev, _a: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimentalNumericField('_a');
+                                }}
+                                style={{ width: 82, fontSize: 11, padding: '1px 4px' }}
+                            />
+                        </label>
+                        <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            `_b`
+                            <input
+                                type="number"
+                                step={EXPERIMENTAL_LIMITS._b.step}
+                                min={EXPERIMENTAL_LIMITS._b.min}
+                                max={EXPERIMENTAL_LIMITS._b.max}
+                                value={llsmNumericInputs._b}
+                                onChange={e => setLlsmNumericInputs(prev => ({ ...prev, _b: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimentalNumericField('_b');
+                                }}
+                                style={{ width: 82, fontSize: 11, padding: '1px 4px' }}
+                            />
+                        </label>
+                        <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            `_12`
+                            <input type="number" readOnly value={llsmExperimental._12} style={{ width: 60, fontSize: 11, padding: '1px 4px', background: '#f3f4f6' }} />
+                        </label>
+                        <label style={{ fontSize: 11, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: 4, minWidth: 260 }}>
+                            `_13`
+                            <input
+                                value={llsm13Input}
+                                onChange={e => setLlsm13Input(e.target.value)}
+                                onKeyDown={e => {
+                                    if (e.key !== 'Enter') return;
+                                    e.preventDefault();
+                                    applyExperimental13();
+                                }}
+                                style={{ flex: 1, minWidth: 180, fontSize: 11, padding: '1px 4px' }}
+                            />
+                        </label>
+                        <button
+                            onClick={applyExperimental13}
+                            style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #7c3aed', borderRadius: 4, background: '#ede9fe', color: '#5b21b6', cursor: 'pointer' }}
+                        >
+                            {t('applyExperimental')}
+                        </button>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('llsmExpDesc9')}</span>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('llsmExpDescA')}</span>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('llsmExpDescB')}</span>
+                        <span style={{ flexBasis: '100%', fontSize: 10, color: '#6b21a8' }}>{t('llsmExpDesc1213')}</span>
+                    </div>
+                )}
+                {isLlsmFile && editorTab === 'experimental' && !llsmExperimental && (
+                    <span style={{ fontSize: 11, color: '#6b21a8', background: '#faf5ff', border: '1px solid #d8b4fe', borderRadius: 6, padding: '3px 8px' }}>
+                        {t('experimentalUnavailable')}
                     </span>
                 )}
                 <div style={{ flex: 1 }} />

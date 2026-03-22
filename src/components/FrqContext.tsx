@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import type { FrqData } from '../lib/frq';
+import type { FrqData, LlsmExperimentalSettings, LlsmVoicingMode } from '../lib/frq';
 
 export interface FrqFileEntry {
     id: string;
@@ -13,7 +13,10 @@ export interface FrqFileEntry {
     redoStack: FrqData[];
     isModified: boolean;
     expectedF0: number | null;
-    sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only';
+    sourceType?: 'frq' | 'mrq' | 'pmk' | 'llsm' | 'generated' | 'wav-only';
+    llsmExperimental?: LlsmExperimentalSettings | null;
+    originalLlsmExperimental?: LlsmExperimentalSettings | null;
+    llsmVoicingMode?: LlsmVoicingMode;
 }
 
 interface UpdateFrqOptions {
@@ -27,8 +30,17 @@ interface FrqContextState {
     addFiles: (entries: FrqFileEntry[]) => void;
     setActiveFile: (id: string) => void;
     updateFrqData: (id: string, newFrqData: FrqData, options?: UpdateFrqOptions) => void;
+    updateLlsmExperimental: (id: string, settings: LlsmExperimentalSettings) => void;
+    updateLlsmVoicingMode: (id: string, mode: LlsmVoicingMode) => void;
     updateWavFile: (wavFiles: File[]) => void;
-    importFrqToEntry: (id: string, frqData: FrqData, frqFile: File, sourceType?: FrqFileEntry['sourceType']) => void;
+    importFrqToEntry: (
+        id: string,
+        frqData: FrqData,
+        frqFile: File,
+        sourceType?: FrqFileEntry['sourceType'],
+        llsmExperimental?: LlsmExperimentalSettings | null,
+        llsmVoicingMode?: LlsmVoicingMode,
+    ) => void;
     resetFrqData: (id: string) => void;
     undo: (id: string) => void;
     redo: (id: string) => void;
@@ -47,9 +59,29 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     const [files, setFiles] = useState<FrqFileEntry[]>([]);
     const [activeFileId, setActiveFileId] = useState<string | null>(null);
 
+    const cloneLlsmExperimental = (settings: LlsmExperimentalSettings): LlsmExperimentalSettings => ({
+        ...settings,
+        _13: [...settings._13],
+    });
+
+    const pickCanonicalLlsmExperimental = (entries: FrqFileEntry[]) => {
+        const found = entries.find(entry => entry.sourceType === 'llsm' && entry.llsmExperimental)?.llsmExperimental;
+        return found ? cloneLlsmExperimental(found) : null;
+    };
+
     const addFiles = (newFiles: FrqFileEntry[]) => {
         setFiles((prev) => {
-            const added = [...prev, ...newFiles];
+            const canonical = pickCanonicalLlsmExperimental(prev) || pickCanonicalLlsmExperimental(newFiles);
+            const normalizedNewFiles = canonical
+                ? newFiles.map(file => {
+                    if (file.sourceType !== 'llsm') return file;
+                    return {
+                        ...file,
+                        llsmExperimental: cloneLlsmExperimental(canonical),
+                    };
+                })
+                : newFiles;
+            const added = [...prev, ...normalizedNewFiles];
             if (!activeFileId && added.length > 0) {
                 setActiveFileId(added[0].id);
             }
@@ -63,18 +95,51 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
         frqData: FrqData,
         frqFile: File,
         sourceType: FrqFileEntry['sourceType'] = 'frq',
+        llsmExperimental?: LlsmExperimentalSettings | null,
+        llsmVoicingMode: LlsmVoicingMode = 'preserve',
     ) => {
-        setFiles(prev => prev.map(f => {
-            if (f.id !== id) return f;
-            return { ...f, frqData, originalFrqData: frqData, frqFile, sourceType, history: [], redoStack: [], isModified: false };
-        }));
+        setFiles(prev => {
+            const canonicalFromOthers = prev.find(f =>
+                f.id !== id && f.sourceType === 'llsm' && f.llsmExperimental,
+            )?.llsmExperimental || null;
+            const effectiveExperimental = sourceType === 'llsm'
+                ? (canonicalFromOthers
+                    ? cloneLlsmExperimental(canonicalFromOthers)
+                    : (llsmExperimental ? cloneLlsmExperimental(llsmExperimental) : null))
+                : undefined;
+            return prev.map(f => {
+                if (f.id !== id) return f;
+                return {
+                    ...f,
+                    frqData,
+                    originalFrqData: frqData,
+                    frqFile,
+                    sourceType,
+                    llsmExperimental: effectiveExperimental,
+                    originalLlsmExperimental: sourceType === 'llsm'
+                        ? (llsmExperimental ? cloneLlsmExperimental(llsmExperimental) : null)
+                        : undefined,
+                    llsmVoicingMode: sourceType === 'llsm' ? llsmVoicingMode : undefined,
+                    history: [],
+                    redoStack: [],
+                    isModified: false,
+                };
+            });
+        });
     };
 
     // Reset FRQ data to original loaded state
     const resetFrqData = (id: string) => {
         setFiles(prev => prev.map(f => {
             if (f.id !== id) return f;
-            return { ...f, frqData: f.originalFrqData, history: [], redoStack: [], isModified: false };
+            return {
+                ...f,
+                frqData: f.originalFrqData,
+                llsmExperimental: f.originalLlsmExperimental,
+                history: [],
+                redoStack: [],
+                isModified: false,
+            };
         }));
     };
     const setActiveFile = (id: string) => {
@@ -101,6 +166,36 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
         );
     };
 
+    const updateLlsmExperimental = (id: string, settings: LlsmExperimentalSettings) => {
+        const nextSettings = cloneLlsmExperimental(settings);
+        setFiles(prev => {
+            const target = prev.find(x => x.id === id);
+            if (!target || target.sourceType !== 'llsm') return prev;
+            return prev.map(f => {
+                if (f.sourceType !== 'llsm') return f;
+                return {
+                    ...f,
+                    llsmExperimental: cloneLlsmExperimental(nextSettings),
+                    isModified: true,
+                };
+            });
+        });
+    };
+
+    const updateLlsmVoicingMode = (id: string, mode: LlsmVoicingMode) => {
+        setFiles(prev =>
+            prev.map(f => {
+                if (f.id !== id) return f;
+                if (f.sourceType !== 'llsm') return f;
+                return {
+                    ...f,
+                    llsmVoicingMode: mode,
+                    isModified: true,
+                };
+            }),
+        );
+    };
+
     // Match incoming .wav files to existing .frq entries by base name
     const updateWavFile = (wavFiles: File[]) => {
         setFiles(prev => prev.map(entry => {
@@ -108,6 +203,8 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
             const frqBase = entry.name
                 .replace(/_wav\.frq$/i, '')
                 .replace(/\.frq$/i, '')
+                .replace(/\.wav\.llsm$/i, '')
+                .replace(/\.llsm$/i, '')
                 .toLowerCase();
             const match = wavFiles.find(w =>
                 w.name.replace(/\.wav$/i, '').toLowerCase() === frqBase
@@ -159,7 +256,7 @@ export const FrqProvider = ({ children }: { children: ReactNode }) => {
     }
 
     return (
-        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateWavFile, importFrqToEntry, resetFrqData, undo, redo, clearFiles }}>
+        <FrqContext.Provider value={{ files, activeFileId, addFiles, setActiveFile, updateFrqData, updateLlsmExperimental, updateLlsmVoicingMode, updateWavFile, importFrqToEntry, resetFrqData, undo, redo, clearFiles }}>
             {children}
         </FrqContext.Provider>
     );

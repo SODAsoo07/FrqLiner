@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useFrqContext, type FrqFileEntry } from './FrqContext';
 import { useLanguage } from './LanguageContext';
-import { writeFrq } from '../lib/frq';
+import { writeFrq, writeLlsm } from '../lib/frq';
+import { downloadBlobWithFallback } from '../lib/browserDownload';
 
 interface TreeNode {
     name: string;
@@ -9,6 +10,12 @@ interface TreeNode {
     children: Record<string, TreeNode>;
     file?: FrqFileEntry;
 }
+
+const errorMessage = (error: unknown) => {
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === 'string' && error.trim().length > 0) return error;
+    return 'Unknown error';
+};
 
 const buildTree = (files: FrqFileEntry[]) => {
     const root: TreeNode = { name: 'root', path: '', children: {} };
@@ -31,27 +38,45 @@ const buildTree = (files: FrqFileEntry[]) => {
     return root;
 };
 
-const downloadFrq = (entry: FrqFileEntry) => {
-    const blob = new Blob([writeFrq(entry.frqData)], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = entry.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+const downloadEntry = async (entry: FrqFileEntry, t: (key: string) => string) => {
+    if (entry.frqData.frames.length === 0) {
+        window.alert(t('noExportableFiles'));
+        return;
+    }
+
+    try {
+        const payload = entry.sourceType === 'llsm'
+            ? writeLlsm(await entry.frqFile.arrayBuffer(), entry.frqData, {
+                experimentalSettings: entry.llsmExperimental,
+                voicingMode: entry.llsmVoicingMode,
+            })
+            : writeFrq(entry.frqData);
+        const downloadName = entry.sourceType === 'llsm'
+            ? (/\.(llsm)$/i.test(entry.frqFile.name) ? entry.frqFile.name : `${entry.name}.llsm`)
+            : entry.name;
+        const blob = new Blob([payload], { type: 'application/octet-stream' });
+        downloadBlobWithFallback(blob, downloadName, {
+            hint: t('downloadFallbackHint'),
+            action: t('downloadFallbackAction'),
+            close: t('close'),
+        });
+    } catch (error) {
+        console.error('Sidebar download failed', error);
+        window.alert(`${t('downloadFailed')}\n${errorMessage(error)}`);
+    }
 };
 
 const TreeItem = ({
     node,
     activeId,
     onSelect,
+    t,
     depth = 0,
 }: {
     node: TreeNode;
     activeId: string | null;
     onSelect: (id: string) => void;
+    t: (key: string) => string;
     depth?: number;
 }) => {
     const [isOpen, setIsOpen] = useState(true);
@@ -63,7 +88,7 @@ const TreeItem = ({
         return (
             <>
                 {Object.values(node.children).map(child => (
-                    <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} depth={depth} />
+                    <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} t={t} depth={depth} />
                 ))}
             </>
         );
@@ -117,7 +142,7 @@ const TreeItem = ({
                             title={node.file!.name}
                             onClick={event => {
                                 event.stopPropagation();
-                                downloadFrq(node.file!);
+                                void downloadEntry(node.file!, t);
                             }}
                             style={{
                                 border: 'none',
@@ -138,7 +163,7 @@ const TreeItem = ({
             {!isFile && isOpen && (
                 <div>
                     {Object.values(node.children).map(child => (
-                        <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} depth={depth + 1} />
+                        <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} t={t} depth={depth + 1} />
                     ))}
                 </div>
             )}
@@ -162,7 +187,7 @@ export const Sidebar = () => {
                         {t('sidebarEmpty')}
                     </div>
                 ) : (
-                    <TreeItem node={tree} activeId={activeFileId} onSelect={setActiveFile} />
+                    <TreeItem node={tree} activeId={activeFileId} onSelect={setActiveFile} t={t} />
                 )}
             </div>
         </div>

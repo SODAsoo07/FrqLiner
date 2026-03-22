@@ -1,11 +1,23 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import JSZip from 'jszip';
-import { useFrqContext } from './FrqContext';
+import { useFrqContext, type FrqFileEntry } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import { extractExpectedF0 } from '../lib/pitch';
-import { parseMrq, parsePmk, parseFrq, writeFrq, type FrqFrame } from '../lib/frq';
+import {
+    parseLlsm,
+    parseMrq,
+    parsePmk,
+    parseFrq,
+    readLlsmExperimentalSettings,
+    writeFrq,
+    writeLlsm,
+    type FrqData,
+    type FrqFrame,
+    type LlsmExperimentalSettings,
+} from '../lib/frq';
 import { normalizeFrqPath } from '../lib/filePath';
 import { generateBasicF0 } from '../lib/pitchTracker';
+import { downloadBlobWithFallback } from '../lib/browserDownload';
 
 const btnStyle = (color: string, disabled = false): React.CSSProperties => ({
     padding: '6px 14px',
@@ -18,23 +30,91 @@ const btnStyle = (color: string, disabled = false): React.CSSProperties => ({
     whiteSpace: 'nowrap',
 });
 
+const experimentalSignature = (settings?: LlsmExperimentalSettings | null) => {
+    if (!settings) return 'none';
+    const fixed = (v: number) => Number(v.toFixed(3));
+    return JSON.stringify({
+        _9: fixed(settings._9),
+        _a: fixed(settings._a),
+        _b: fixed(settings._b),
+        _13: settings._13.map(fixed),
+    });
+};
+
+const errorMessage = (error: unknown) => {
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === 'string' && error.trim().length > 0) return error;
+    return 'Unknown error';
+};
+
+interface ManualDownloadLink {
+    url: string;
+    fileName: string;
+}
+
 export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () => void; isSidebarOpen: boolean }) => {
-    const { files, addFiles, updateWavFile, importFrqToEntry, clearFiles, updateFrqData } = useFrqContext();
+    const { files, activeFileId, addFiles, updateWavFile, importFrqToEntry, clearFiles, updateFrqData } = useFrqContext();
     const { language, setLanguage, t } = useLanguage();
     const frqInputRef = useRef<HTMLInputElement>(null);
     const wavInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
+    const zipDownloadLockRef = useRef(false);
+    const currentDownloadLockRef = useRef(false);
     const [generatingPct, setGeneratingPct] = useState<number | null>(null);
+    const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+    const [isDownloadingCurrent, setIsDownloadingCurrent] = useState(false);
+    const [isPreparingManualLinks, setIsPreparingManualLinks] = useState(false);
+    const [manualLinksOpen, setManualLinksOpen] = useState(false);
+    const [manualError, setManualError] = useState<string | null>(null);
+    const [manualZipLink, setManualZipLink] = useState<ManualDownloadLink | null>(null);
+    const [manualCurrentLink, setManualCurrentLink] = useState<ManualDownloadLink | null>(null);
+    const manualZipUrlRef = useRef<string | null>(null);
+    const manualCurrentUrlRef = useRef<string | null>(null);
+
+    const revokeManualZipUrl = () => {
+        if (manualZipUrlRef.current) {
+            URL.revokeObjectURL(manualZipUrlRef.current);
+            manualZipUrlRef.current = null;
+        }
+    };
+    const revokeManualCurrentUrl = () => {
+        if (manualCurrentUrlRef.current) {
+            URL.revokeObjectURL(manualCurrentUrlRef.current);
+            manualCurrentUrlRef.current = null;
+        }
+    };
+    const updateManualZipLink = (next: ManualDownloadLink | null) => {
+        revokeManualZipUrl();
+        manualZipUrlRef.current = next?.url ?? null;
+        setManualZipLink(next);
+    };
+    const updateManualCurrentLink = (next: ManualDownloadLink | null) => {
+        revokeManualCurrentUrl();
+        manualCurrentUrlRef.current = next?.url ?? null;
+        setManualCurrentLink(next);
+    };
+    const clearManualLinks = () => {
+        updateManualZipLink(null);
+        updateManualCurrentLink(null);
+    };
+
+    useEffect(() => () => {
+        revokeManualZipUrl();
+        revokeManualCurrentUrl();
+    }, []);
 
     const processFiles = async (fileList: File[]) => {
+        const normalizePath = (value: string) => value.replace(/\\/g, '/');
         const groups = new Map<string, {
             frq?: File;
             wav?: File;
             pmk?: File;
+            llsm?: File;
             baseName?: string;
             path?: string;
-            frqData?: any;
-            sourceType?: 'frq' | 'mrq' | 'pmk' | 'generated' | 'wav-only';
+            frqData?: FrqData;
+            llsmExperimental?: LlsmExperimentalSettings | null;
+            sourceType?: 'frq' | 'mrq' | 'pmk' | 'llsm' | 'generated' | 'wav-only';
         }>();
 
         for (const file of fileList) {
@@ -57,6 +137,13 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 const key = path.replace(/_wav\.pmk$/i, '').replace(/\.pmk$/i, '');
                 const group = groups.get(key) || { baseName, path };
                 group.pmk = file;
+                groups.set(key, group);
+            } else if (file.name.endsWith('.llsm')) {
+                const baseName = file.name.replace(/\.wav\.llsm$/i, '').replace(/\.llsm$/i, '');
+                const key = path.replace(/\.wav\.llsm$/i, '').replace(/\.llsm$/i, '');
+                const group = groups.get(key) || { baseName, path };
+                group.llsm = file;
+                group.sourceType = 'llsm';
                 groups.set(key, group);
             } else if (file.name.endsWith('.mrq')) {
                 const buffer = await file.arrayBuffer();
@@ -93,7 +180,13 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
         const entryBase = (entryName: string) =>
             entryName.replace(/_wav\.frq$/i, '').replace(/\.frq$/i, '').toLowerCase();
         const groupBase = (group: { baseName?: string }, key: string) =>
-            (group.baseName || key).replace(/_wav\.frq$/i, '').replace(/\.frq$/i, '').replace(/\.wav$/i, '').toLowerCase();
+            (group.baseName || key)
+                .replace(/_wav\.frq$/i, '')
+                .replace(/\.frq$/i, '')
+                .replace(/\.wav\.llsm$/i, '')
+                .replace(/\.llsm$/i, '')
+                .replace(/\.wav$/i, '')
+                .toLowerCase();
 
         const keysToSkip = new Set<string>();
 
@@ -109,7 +202,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 }
             }
 
-            if ((group.frq || group.pmk) && !group.wav) {
+            if ((group.frq || group.pmk || group.llsm) && !group.wav) {
                 const match = files.find(entry => entryBase(entry.name) === gb && entry.sourceType === 'wav-only');
                 if (match) {
                     try {
@@ -118,6 +211,11 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         if (group.frq) {
                             frqFileObj = group.frq;
                             frqData = parseFrq(await group.frq.arrayBuffer());
+                        } else if (group.llsm) {
+                            const llsmBuf = await group.llsm.arrayBuffer();
+                            frqData = parseLlsm(llsmBuf);
+                            group.llsmExperimental = readLlsmExperimentalSettings(llsmBuf);
+                            frqFileObj = group.llsm;
                         } else {
                             const wavBuf = await match.wavFile!.arrayBuffer();
                             const ac = new AudioContext();
@@ -128,7 +226,14 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                             frqData = parsePmk(await group.pmk!.arrayBuffer(), frameCount, sampleRate);
                             frqFileObj = new File([new ArrayBuffer(0)], `${gb}_wav.frq`);
                         }
-                        importFrqToEntry(match.id, frqData, frqFileObj, group.frq ? 'frq' : 'pmk');
+                        importFrqToEntry(
+                            match.id,
+                            frqData,
+                            frqFileObj,
+                            group.frq ? 'frq' : group.llsm ? 'llsm' : 'pmk',
+                            group.llsm ? (group.llsmExperimental ?? null) : undefined,
+                            group.llsm ? 'preserve' : undefined,
+                        );
                         keysToSkip.add(key);
                     } catch (err) {
                         console.error('Merge frq to wav-only failed', err);
@@ -137,22 +242,40 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             }
         }
 
-        const newEntries = [];
+        const newEntries: FrqFileEntry[] = [];
         for (const [baseName, group] of groups.entries()) {
             if (keysToSkip.has(baseName)) continue;
             const expectedF0 = extractExpectedF0(group.baseName || baseName);
 
-            if (group.frq) {
+            if (group.frq || group.llsm) {
                 try {
                     let frqData = group.frqData;
-                    const sourceType = group.sourceType || 'frq';
-                    if (!frqData) frqData = parseFrq(await group.frq.arrayBuffer());
+                    const sourceType = group.sourceType || (group.llsm ? 'llsm' : 'frq');
+                    if (!frqData) {
+                        if (group.frq) {
+                            frqData = parseFrq(await group.frq.arrayBuffer());
+                        } else if (group.llsm) {
+                            const llsmBuf = await group.llsm.arrayBuffer();
+                            frqData = parseLlsm(llsmBuf);
+                            if (!group.llsmExperimental) {
+                                group.llsmExperimental = readLlsmExperimentalSettings(llsmBuf);
+                            }
+                        }
+                    }
+                    if (!frqData) continue;
+
+                    const frqFile = group.frq
+                        || group.llsm
+                        || new File([new ArrayBuffer(0)], `${(group.baseName || baseName).replace(/\.wav$/i, '')}_wav.frq`);
+                    const pathSourceName = sourceType === 'llsm'
+                        ? normalizePath(group.path || group.llsm?.name || frqFile.name)
+                        : normalizeFrqPath(group.path || group.frq?.name || group.llsm?.name || frqFile.name, frqFile.name);
                     newEntries.push({
                         id: crypto.randomUUID(),
-                        frqFile: group.frq,
+                        frqFile,
                         wavFile: group.wav || null,
-                        name: group.frq.name,
-                        path: normalizeFrqPath(group.path || group.frq.name, group.frq.name),
+                        name: frqFile.name,
+                        path: pathSourceName,
                         frqData,
                         originalFrqData: frqData,
                         history: [],
@@ -160,9 +283,12 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                         isModified: false,
                         expectedF0,
                         sourceType,
+                        llsmExperimental: sourceType === 'llsm' ? (group.llsmExperimental ?? null) : undefined,
+                        originalLlsmExperimental: sourceType === 'llsm' ? (group.llsmExperimental ?? null) : undefined,
+                        llsmVoicingMode: sourceType === 'llsm' ? 'preserve' : undefined,
                     });
                 } catch (err) {
-                    console.error(`Failed to parse ${group.frq.name}`, err);
+                    console.error(`Failed to parse ${group.frq?.name || group.llsm?.name || baseName}`, err);
                 }
             } else if (group.pmk) {
                 try {
@@ -257,29 +383,189 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
     };
 
     const handleDownloadAll = async () => {
+        if (isDownloadingZip || zipDownloadLockRef.current) return;
         if (files.length === 0) return;
         const exportableFiles = files.filter(entry => entry.frqData.frames.length > 0);
-        if (exportableFiles.length === 0) return;
+        if (exportableFiles.length === 0) {
+            window.alert(t('noExportableFiles'));
+            return;
+        }
+        const exportableLlsm = exportableFiles.filter(entry => entry.sourceType === 'llsm');
+        const exportableSignatures = new Set(exportableLlsm.map(entry => experimentalSignature(entry.llsmExperimental)));
+        const hasMismatchInExport = exportableSignatures.size > 1;
+        const active = files.find(file => file.id === activeFileId) || null;
+        const activeLlsm = active && active.sourceType === 'llsm' ? active : null;
+        const normalizedExperimentalSettings =
+            activeLlsm?.llsmExperimental
+            ?? exportableLlsm.find(entry => entry.llsmExperimental)?.llsmExperimental
+            ?? null;
 
-        const zip = new JSZip();
-        for (const entry of exportableFiles) {
-            zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+        if (hasMismatchInExport) {
+            window.alert(t('experimentalMismatchNormalized'));
         }
 
-        const blob = await zip.generateAsync({ type: 'blob' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'edited_frq_files.zip';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        zipDownloadLockRef.current = true;
+        setIsDownloadingZip(true);
+        try {
+            const zip = new JSZip();
+            for (const entry of exportableFiles) {
+                if (entry.sourceType === 'llsm') {
+                    const baseBuffer = await entry.frqFile.arrayBuffer();
+                    const normalizedPath = entry.path.replace(/\\/g, '/');
+                    const lastSlash = normalizedPath.lastIndexOf('/');
+                    const dir = lastSlash >= 0 ? normalizedPath.slice(0, lastSlash + 1) : '';
+                    const llsmName = /\.llsm$/i.test(entry.frqFile.name)
+                        ? entry.frqFile.name
+                        : `${entry.frqFile.name}.llsm`;
+                    zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, {
+                        experimentalSettings: hasMismatchInExport
+                            ? normalizedExperimentalSettings
+                            : entry.llsmExperimental,
+                        voicingMode: entry.llsmVoicingMode,
+                    }));
+                } else {
+                    zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+                }
+            }
+
+            const blob = await zip.generateAsync({ type: 'blob' });
+            downloadBlobWithFallback(blob, 'edited_frq_files.zip', {
+                hint: t('downloadFallbackHint'),
+                action: t('downloadFallbackAction'),
+                close: t('close'),
+            });
+        } catch (error) {
+            console.error('ZIP export failed', error);
+            window.alert(`${t('downloadFailed')}\n${errorMessage(error)}`);
+        } finally {
+            zipDownloadLockRef.current = false;
+            setIsDownloadingZip(false);
+        }
+    };
+
+    const handleDownloadCurrent = async () => {
+        if (isDownloadingCurrent || currentDownloadLockRef.current) return;
+        const active = files.find(file => file.id === activeFileId);
+        if (!active || active.frqData.frames.length === 0) {
+            window.alert(t('noExportableFiles'));
+            return;
+        }
+        currentDownloadLockRef.current = true;
+        setIsDownloadingCurrent(true);
+
+        try {
+            const payload = active.sourceType === 'llsm'
+                ? writeLlsm(await active.frqFile.arrayBuffer(), active.frqData, {
+                    experimentalSettings: active.llsmExperimental,
+                    voicingMode: active.llsmVoicingMode,
+                })
+                : writeFrq(active.frqData);
+            const downloadName = active.sourceType === 'llsm'
+                ? (/\.(llsm)$/i.test(active.frqFile.name) ? active.frqFile.name : `${active.name}.llsm`)
+                : active.name;
+            const blob = new Blob([payload], { type: 'application/octet-stream' });
+            downloadBlobWithFallback(blob, downloadName, {
+                hint: t('downloadFallbackHint'),
+                action: t('downloadFallbackAction'),
+                close: t('close'),
+            });
+        } catch (error) {
+            console.error('Single download failed', error);
+            window.alert(`${t('downloadFailed')}\n${errorMessage(error)}`);
+        } finally {
+            currentDownloadLockRef.current = false;
+            setIsDownloadingCurrent(false);
+        }
+    };
+
+    const handlePrepareManualLinks = async () => {
+        if (isPreparingManualLinks) return;
+        setManualLinksOpen(true);
+        setManualError(null);
+        setIsPreparingManualLinks(true);
+        try {
+            let nextZipLink: ManualDownloadLink | null = null;
+            let nextCurrentLink: ManualDownloadLink | null = null;
+
+            const exportableFiles = files.filter(entry => entry.frqData.frames.length > 0);
+            if (exportableFiles.length > 0) {
+                const exportableLlsm = exportableFiles.filter(entry => entry.sourceType === 'llsm');
+                const exportableSignatures = new Set(exportableLlsm.map(entry => experimentalSignature(entry.llsmExperimental)));
+                const hasMismatchInExport = exportableSignatures.size > 1;
+                const active = files.find(file => file.id === activeFileId) || null;
+                const activeLlsm = active && active.sourceType === 'llsm' ? active : null;
+                const normalizedExperimentalSettings =
+                    activeLlsm?.llsmExperimental
+                    ?? exportableLlsm.find(entry => entry.llsmExperimental)?.llsmExperimental
+                    ?? null;
+
+                const zip = new JSZip();
+                for (const entry of exportableFiles) {
+                    if (entry.sourceType === 'llsm') {
+                        const baseBuffer = await entry.frqFile.arrayBuffer();
+                        const normalizedPath = entry.path.replace(/\\/g, '/');
+                        const lastSlash = normalizedPath.lastIndexOf('/');
+                        const dir = lastSlash >= 0 ? normalizedPath.slice(0, lastSlash + 1) : '';
+                        const llsmName = /\.llsm$/i.test(entry.frqFile.name)
+                            ? entry.frqFile.name
+                            : `${entry.frqFile.name}.llsm`;
+                        zip.file(`${dir}${llsmName}`, writeLlsm(baseBuffer, entry.frqData, {
+                            experimentalSettings: hasMismatchInExport
+                                ? normalizedExperimentalSettings
+                                : entry.llsmExperimental,
+                            voicingMode: entry.llsmVoicingMode,
+                        }));
+                    } else {
+                        zip.file(normalizeFrqPath(entry.path, entry.name), writeFrq(entry.frqData));
+                    }
+                }
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                nextZipLink = {
+                    url: URL.createObjectURL(zipBlob),
+                    fileName: 'edited_frq_files.zip',
+                };
+            }
+
+            const active = files.find(file => file.id === activeFileId);
+            if (active && active.frqData.frames.length > 0) {
+                const payload = active.sourceType === 'llsm'
+                    ? writeLlsm(await active.frqFile.arrayBuffer(), active.frqData, {
+                        experimentalSettings: active.llsmExperimental,
+                        voicingMode: active.llsmVoicingMode,
+                    })
+                    : writeFrq(active.frqData);
+                const downloadName = active.sourceType === 'llsm'
+                    ? (/\.(llsm)$/i.test(active.frqFile.name) ? active.frqFile.name : `${active.name}.llsm`)
+                    : active.name;
+                const blob = new Blob([payload], { type: 'application/octet-stream' });
+                nextCurrentLink = {
+                    url: URL.createObjectURL(blob),
+                    fileName: downloadName,
+                };
+            }
+
+            updateManualZipLink(nextZipLink);
+            updateManualCurrentLink(nextCurrentLink);
+            if (!nextZipLink && !nextCurrentLink) {
+                setManualError(t('noExportableFiles'));
+            }
+        } catch (error) {
+            console.error('Manual download link preparation failed', error);
+            clearManualLinks();
+            setManualError(`${t('downloadFailed')}\n${errorMessage(error)}`);
+        } finally {
+            setIsPreparingManualLinks(false);
+        }
     };
 
     const modifiedCount = files.filter(file => file.isModified).length;
     const wavCount = files.filter(file => file.wavFile).length;
     const exportableCount = files.filter(file => file.frqData.frames.length > 0).length;
+    const activeFile = files.find(file => file.id === activeFileId) || null;
+    const canDownloadCurrent = Boolean(activeFile && activeFile.frqData.frames.length > 0) && !isDownloadingCurrent;
+    const llsmFiles = files.filter(file => file.sourceType === 'llsm');
+    const llsmSignatures = new Set(llsmFiles.map(file => experimentalSignature(file.llsmExperimental)));
+    const hasExperimentalMismatch = llsmSignatures.size > 1;
 
     return (
         <div style={{ display: 'flex', gap: '6px', padding: '8px 12px', borderBottom: '1px solid #ccc', background: '#f8f9fa', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -292,7 +578,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             <button onClick={() => frqInputRef.current?.click()} style={btnStyle('#0d6efd')}>
                 {t('openFiles')}
             </button>
-            <input ref={frqInputRef} type="file" multiple accept=".frq,.wav,.mrq,.pmk" onChange={handleFrqChange} style={{ display: 'none' }} />
+            <input ref={frqInputRef} type="file" multiple accept=".frq,.wav,.mrq,.pmk,.llsm" onChange={handleFrqChange} style={{ display: 'none' }} />
 
             <button onClick={() => wavInputRef.current?.click()} style={btnStyle('#0dcaf0')} title="Add WAV files and pair them with loaded FRQ files">
                 {t('addWav')}
@@ -310,6 +596,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             {files.length > 0 && (
                 <span style={{ fontSize: '13px', color: '#495057', background: '#e9ecef', padding: '4px 10px', borderRadius: '4px' }}>
                     {t('fileStats', { count: files.length })}
+                    {hasExperimentalMismatch && <span style={{ color: '#7c2d12' }}> · {t('experimentalMismatch')}</span>}
                     {wavCount > 0 && <> · {t('wavStats', { count: wavCount })}</>}
                     {modifiedCount > 0 && <span style={{ color: '#dc3545' }}> · {t('modifiedStats', { count: modifiedCount })}</span>}
                 </span>
@@ -374,13 +661,55 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 {generatingPct !== null ? `${t('autoGenerate')} ${generatingPct}%` : t('autoGenerate')}
             </button>
 
-            <button onClick={handleDownloadAll} disabled={exportableCount === 0} style={btnStyle('#198754', exportableCount === 0)}>
+            <button onClick={handleDownloadAll} disabled={exportableCount === 0 || isDownloadingZip} style={btnStyle('#198754', exportableCount === 0 || isDownloadingZip)}>
                 {t('downloadZip')}
+            </button>
+            <button onClick={handleDownloadCurrent} disabled={!canDownloadCurrent} style={btnStyle('#0f766e', !canDownloadCurrent)}>
+                {t('downloadCurrent')}
+            </button>
+            <button onClick={() => void handlePrepareManualLinks()} disabled={isPreparingManualLinks} style={btnStyle('#334155', isPreparingManualLinks)}>
+                {isPreparingManualLinks ? t('manualPreparing') : t('manualDownload')}
             </button>
 
             <button onClick={clearFiles} disabled={files.length === 0} style={btnStyle('#dc3545', files.length === 0)}>
                 {t('clear')}
             </button>
+
+            {manualLinksOpen && (
+                <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px', background: '#f8fafc' }}>
+                    <strong style={{ fontSize: '12px', color: '#1f2937' }}>{t('manualLinksTitle')}</strong>
+                    {isPreparingManualLinks && <span style={{ fontSize: '12px', color: '#475569' }}>{t('manualPreparing')}</span>}
+                    {!isPreparingManualLinks && manualZipLink && (
+                        <a href={manualZipLink.url} download={manualZipLink.fileName} style={{ fontSize: '12px', color: '#1d4ed8', fontWeight: 600 }}>
+                            {t('manualZipLink')}
+                        </a>
+                    )}
+                    {!isPreparingManualLinks && manualCurrentLink && (
+                        <a href={manualCurrentLink.url} download={manualCurrentLink.fileName} style={{ fontSize: '12px', color: '#0f766e', fontWeight: 600 }}>
+                            {t('manualCurrentLink')}
+                        </a>
+                    )}
+                    {!isPreparingManualLinks && !manualZipLink && !manualCurrentLink && !manualError && (
+                        <span style={{ fontSize: '12px', color: '#64748b' }}>{t('manualNoLinks')}</span>
+                    )}
+                    {manualError && (
+                        <span style={{ fontSize: '12px', color: '#b91c1c', whiteSpace: 'pre-line' }}>{manualError}</span>
+                    )}
+                    <button onClick={() => void handlePrepareManualLinks()} disabled={isPreparingManualLinks} style={btnStyle('#64748b', isPreparingManualLinks)}>
+                        {t('manualRefresh')}
+                    </button>
+                    <button
+                        onClick={() => {
+                            setManualLinksOpen(false);
+                            setManualError(null);
+                            clearManualLinks();
+                        }}
+                        style={btnStyle('#94a3b8')}
+                    >
+                        {t('close')}
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

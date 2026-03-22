@@ -14,7 +14,12 @@
     "electron:build:win": "cross-env ELECTRON_BUILD=true npm run build && electron-builder --win",
     "electron:build:mac": "cross-env ELECTRON_BUILD=true npm run build && electron-builder --mac",
     "electron:build": "cross-env ELECTRON_BUILD=true npm run build && electron-builder --win --mac",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "llsm:inspect": "node tools/inspect-llsm.cjs",
+    "llsm:read": "node tools/llsm-tool.cjs pitch export",
+    "llsm:write": "node tools/llsm-tool.cjs pitch apply",
+    "llsm:pitch:shift": "node tools/llsm-tool.cjs pitch shift",
+    "llsm:exp:header-set": "node tools/llsm-tool.cjs experimental header-set"
   },
   "build": {
     "appId": "com.frqliner.app",
