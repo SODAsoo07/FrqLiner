@@ -31,36 +31,48 @@ const buildTree = (files: FrqFileEntry[]) => {
     return root;
 };
 
-const downloadEntry = async (entry: FrqFileEntry) => {
-    const payload = entry.sourceType === 'llsm'
-        ? writeLlsm(await entry.frqFile.arrayBuffer(), entry.frqData, {
-            experimentalSettings: entry.llsmExperimental,
-            voicingMode: entry.llsmVoicingMode,
-        })
-        : writeFrq(entry.frqData);
-    const downloadName = entry.sourceType === 'llsm'
-        ? (/\.(llsm)$/i.test(entry.frqFile.name) ? entry.frqFile.name : `${entry.name}.llsm`)
-        : entry.name;
-    const blob = new Blob([payload], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = downloadName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+const downloadEntry = async (entry: FrqFileEntry, t: (key: string) => string) => {
+    if (entry.frqData.frames.length === 0) {
+        window.alert(t('noExportableFiles'));
+        return;
+    }
+
+    try {
+        const payload = entry.sourceType === 'llsm'
+            ? writeLlsm(await entry.frqFile.arrayBuffer(), entry.frqData, {
+                experimentalSettings: entry.llsmExperimental,
+                voicingMode: entry.llsmVoicingMode,
+            })
+            : writeFrq(entry.frqData);
+        const downloadName = entry.sourceType === 'llsm'
+            ? (/\.(llsm)$/i.test(entry.frqFile.name) ? entry.frqFile.name : `${entry.name}.llsm`)
+            : entry.name;
+        const blob = new Blob([payload], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = downloadName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+        console.error('Sidebar download failed', error);
+        window.alert(t('downloadFailed'));
+    }
 };
 
 const TreeItem = ({
     node,
     activeId,
     onSelect,
+    t,
     depth = 0,
 }: {
     node: TreeNode;
     activeId: string | null;
     onSelect: (id: string) => void;
+    t: (key: string) => string;
     depth?: number;
 }) => {
     const [isOpen, setIsOpen] = useState(true);
@@ -72,7 +84,7 @@ const TreeItem = ({
         return (
             <>
                 {Object.values(node.children).map(child => (
-                    <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} depth={depth} />
+                    <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} t={t} depth={depth} />
                 ))}
             </>
         );
@@ -126,7 +138,7 @@ const TreeItem = ({
                             title={node.file!.name}
                             onClick={event => {
                                 event.stopPropagation();
-                                void downloadEntry(node.file!);
+                                void downloadEntry(node.file!, t);
                             }}
                             style={{
                                 border: 'none',
@@ -147,7 +159,7 @@ const TreeItem = ({
             {!isFile && isOpen && (
                 <div>
                     {Object.values(node.children).map(child => (
-                        <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} depth={depth + 1} />
+                        <TreeItem key={child.path} node={child} activeId={activeId} onSelect={onSelect} t={t} depth={depth + 1} />
                     ))}
                 </div>
             )}
@@ -171,7 +183,7 @@ export const Sidebar = () => {
                         {t('sidebarEmpty')}
                     </div>
                 ) : (
-                    <TreeItem node={tree} activeId={activeFileId} onSelect={setActiveFile} />
+                    <TreeItem node={tree} activeId={activeFileId} onSelect={setActiveFile} t={t} />
                 )}
             </div>
         </div>

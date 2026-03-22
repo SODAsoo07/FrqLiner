@@ -46,6 +46,8 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
     const frqInputRef = useRef<HTMLInputElement>(null);
     const wavInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
+    const zipDownloadLockRef = useRef(false);
+    const currentDownloadLockRef = useRef(false);
     const [generatingPct, setGeneratingPct] = useState<number | null>(null);
     const [isDownloadingZip, setIsDownloadingZip] = useState(false);
     const [isDownloadingCurrent, setIsDownloadingCurrent] = useState(false);
@@ -330,11 +332,13 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
     };
 
     const handleDownloadAll = async () => {
-        if (isDownloadingZip) return;
+        if (isDownloadingZip || zipDownloadLockRef.current) return;
         if (files.length === 0) return;
         const exportableFiles = files.filter(entry => entry.frqData.frames.length > 0);
-        if (exportableFiles.length === 0) return;
-        setIsDownloadingZip(true);
+        if (exportableFiles.length === 0) {
+            window.alert(t('noExportableFiles'));
+            return;
+        }
         const exportableLlsm = exportableFiles.filter(entry => entry.sourceType === 'llsm');
         const exportableSignatures = new Set(exportableLlsm.map(entry => experimentalSignature(entry.llsmExperimental)));
         const hasMismatchInExport = exportableSignatures.size > 1;
@@ -349,6 +353,8 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             window.alert(t('experimentalMismatchNormalized'));
         }
 
+        zipDownloadLockRef.current = true;
+        setIsDownloadingZip(true);
         try {
             const zip = new JSZip();
             for (const entry of exportableFiles) {
@@ -379,16 +385,24 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+        } catch (error) {
+            console.error('ZIP export failed', error);
+            window.alert(t('downloadFailed'));
         } finally {
+            zipDownloadLockRef.current = false;
             setIsDownloadingZip(false);
         }
     };
 
     const handleDownloadCurrent = async () => {
-        if (isDownloadingCurrent) return;
+        if (isDownloadingCurrent || currentDownloadLockRef.current) return;
         const active = files.find(file => file.id === activeFileId);
-        if (!active || active.frqData.frames.length === 0) return;
+        if (!active || active.frqData.frames.length === 0) {
+            window.alert(t('noExportableFiles'));
+            return;
+        }
+        currentDownloadLockRef.current = true;
         setIsDownloadingCurrent(true);
 
         try {
@@ -409,17 +423,21 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+        } catch (error) {
+            console.error('Single download failed', error);
+            window.alert(t('downloadFailed'));
         } finally {
+            currentDownloadLockRef.current = false;
             setIsDownloadingCurrent(false);
         }
     };
 
     const modifiedCount = files.filter(file => file.isModified).length;
     const wavCount = files.filter(file => file.wavFile).length;
-    const hasFiles = files.length > 0;
+    const exportableCount = files.filter(file => file.frqData.frames.length > 0).length;
     const activeFile = files.find(file => file.id === activeFileId) || null;
-    const canDownloadCurrent = Boolean(activeFile) && !isDownloadingCurrent;
+    const canDownloadCurrent = Boolean(activeFile && activeFile.frqData.frames.length > 0) && !isDownloadingCurrent;
     const llsmFiles = files.filter(file => file.sourceType === 'llsm');
     const llsmSignatures = new Set(llsmFiles.map(file => experimentalSignature(file.llsmExperimental)));
     const hasExperimentalMismatch = llsmSignatures.size > 1;
@@ -518,7 +536,7 @@ export const Toolbar = ({ toggleSidebar, isSidebarOpen }: { toggleSidebar: () =>
                 {generatingPct !== null ? `${t('autoGenerate')} ${generatingPct}%` : t('autoGenerate')}
             </button>
 
-            <button onClick={handleDownloadAll} disabled={!hasFiles || isDownloadingZip} style={btnStyle('#198754', !hasFiles || isDownloadingZip)}>
+            <button onClick={handleDownloadAll} disabled={exportableCount === 0 || isDownloadingZip} style={btnStyle('#198754', exportableCount === 0 || isDownloadingZip)}>
                 {t('downloadZip')}
             </button>
             <button onClick={handleDownloadCurrent} disabled={!canDownloadCurrent} style={btnStyle('#0f766e', !canDownloadCurrent)}>
