@@ -20,6 +20,8 @@ const VISUAL_MAX_FREQ = 2400;
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const NATURAL_NOTES = new Set([0, 2, 4, 5, 7, 9, 11]);
+const TARGET_NOTE_MIN_MIDI = 36; // C2
+const TARGET_NOTE_MAX_MIDI = 96; // C7
 type SpectrogramQuality = 'low' | 'default' | 'high';
 const SPECTROGRAM_CONFIG: Record<SpectrogramQuality, { bufferSize: number; hopSize: number; visibleBins: number; gain: number }> = {
     low: { bufferSize: 1024, hopSize: 512, visibleBins: 72, gain: 28 },
@@ -89,6 +91,64 @@ const formatPitch = (f0: number) => {
         cents: `${cents > 0 ? '+' : ''}${cents}c`,
         snappedHz,
         hz: `${f0.toFixed(1)} Hz`,
+    };
+};
+
+const midiToNoteLabel = (midi: number) => {
+    const noteName = NOTE_NAMES[(midi % 12 + 12) % 12];
+    const octave = Math.floor(midi / 12) - 1;
+    return `${noteName}${octave}`;
+};
+
+const TARGET_NOTE_OPTIONS = Array.from(
+    { length: TARGET_NOTE_MAX_MIDI - TARGET_NOTE_MIN_MIDI + 1 },
+    (_, i) => {
+        const midi = TARGET_NOTE_MIN_MIDI + i;
+        const hz = 440 * Math.pow(2, (midi - 69) / 12);
+        return {
+            midi,
+            label: `${midiToNoteLabel(midi)} (${hz.toFixed(1)}Hz)`,
+        };
+    },
+);
+
+const getMedianVoicedF0 = (frames: FrqFrame[]) => {
+    const voiced = frames
+        .map(frame => frame.f0)
+        .filter(f0 => Number.isFinite(f0) && f0 > 1)
+        .sort((a, b) => a - b);
+    if (voiced.length === 0) return null;
+    return voiced[Math.floor(voiced.length / 2)];
+};
+
+const getMeanVoicedF0 = (frames: FrqFrame[]) => {
+    const voiced = frames
+        .map(frame => frame.f0)
+        .filter(f0 => Number.isFinite(f0) && f0 > 1);
+    if (voiced.length === 0) return null;
+    const sum = voiced.reduce((acc, f0) => acc + f0, 0);
+    return sum / voiced.length;
+};
+
+const shiftCurveToTargetMidi = (
+    frames: FrqFrame[],
+    targetMidi: number,
+    referenceMode: 'median' | 'mean',
+) => {
+    const sourceF0 = referenceMode === 'mean'
+        ? getMeanVoicedF0(frames)
+        : getMedianVoicedF0(frames);
+    if (!sourceF0) return null;
+    const sourceMidi = 69 + 12 * Math.log2(sourceF0 / 440);
+    const semitoneDelta = targetMidi - sourceMidi;
+    const ratio = Math.pow(2, semitoneDelta / 12);
+    const shifted = frames.map(frame => {
+        if (!Number.isFinite(frame.f0) || frame.f0 <= 1) return frame;
+        return { ...frame, f0: Math.max(1, frame.f0 * ratio) };
+    });
+    return {
+        frames: shifted,
+        semitoneDelta,
     };
 };
 
@@ -178,6 +238,8 @@ const Editor = () => {
         _b: '',
     });
     const [llsm13Input, setLlsm13Input] = useState<string>('');
+    const [targetShiftMidi, setTargetShiftMidi] = useState<number>(69);
+    const [shiftReferenceMode, setShiftReferenceMode] = useState<'median' | 'mean'>('median');
 
     // Storing decoded audio as STATE so renders are triggered
     const [waveformData, setWaveformData] = useState<Float32Array | null>(null);
@@ -206,6 +268,30 @@ const Editor = () => {
         [activeFile?.originalFrqData.frames],
     );
     const hasPitchPreviewDiff = editedPitchHash !== originalPitchHash;
+    const applyAutoCorrectToFiles = useCallback((entries: typeof files) => {
+        for (const entry of entries) {
+            if (!entry.frqData.frames.length) continue;
+            const corrected = autoCorrectFrq(entry.frqData.frames);
+            updateFrqData(entry.id, { ...entry.frqData, frames: corrected });
+        }
+    }, [updateFrqData]);
+    const applyShiftToFiles = useCallback((
+        entries: typeof files,
+        targetMidi: number,
+        referenceMode: 'median' | 'mean',
+    ) => {
+        let changedCount = 0;
+        for (const entry of entries) {
+            if (!entry.frqData.frames.length) continue;
+            const shifted = shiftCurveToTargetMidi(entry.frqData.frames, targetMidi, referenceMode);
+            if (!shifted) continue;
+            updateFrqData(entry.id, { ...entry.frqData, frames: shifted.frames });
+            changedCount += 1;
+        }
+        if (changedCount === 0) {
+            window.alert(t('pitchShiftNoVoiced'));
+        }
+    }, [t, updateFrqData]);
     const attachAudio = useCallback((url: string) => {
         if (audioRef.current) {
             audioRef.current.pause();
@@ -1213,16 +1299,58 @@ const Editor = () => {
                         {t('experimentalUnavailable')}
                     </span>
                 )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #bbf7d0', borderRadius: 8, background: '#f0fdf4' }}>
+                    <span style={{ fontSize: 11, color: '#166534', fontWeight: 700 }}>{t('autoCorrect')}</span>
+                    <button
+                        onClick={() => applyAutoCorrectToFiles([activeFile])}
+                        style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #16a34a', borderRadius: 999, background: '#dcfce7', color: '#166534', cursor: 'pointer', fontWeight: 700 }}
+                        title={t('autoCorrectHint')}
+                    >
+                        {t('applyThisFile')}
+                    </button>
+                    <button
+                        onClick={() => applyAutoCorrectToFiles(files)}
+                        style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #15803d', borderRadius: 999, background: '#bbf7d0', color: '#14532d', cursor: 'pointer', fontWeight: 700 }}
+                        title={t('autoCorrectHint')}
+                    >
+                        {t('applyAllOpen')}
+                    </button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #bfdbfe', borderRadius: 8, background: '#eff6ff' }}>
+                    <span style={{ fontSize: 11, color: '#1d4ed8', fontWeight: 700 }}>{t('pitchShiftToNote')}</span>
+                    <select
+                        value={shiftReferenceMode}
+                        onChange={e => setShiftReferenceMode(e.target.value as 'median' | 'mean')}
+                        style={{ fontSize: 11, padding: '1px 4px', border: '1px solid #93c5fd', borderRadius: 4, background: '#fff', minWidth: 90 }}
+                    >
+                        <option value="median">{t('referenceMedian')}</option>
+                        <option value="mean">{t('referenceMean')}</option>
+                    </select>
+                    <select
+                        value={targetShiftMidi}
+                        onChange={e => setTargetShiftMidi(Number(e.target.value))}
+                        style={{ fontSize: 11, padding: '1px 4px', border: '1px solid #93c5fd', borderRadius: 4, background: '#fff', minWidth: 120 }}
+                    >
+                        {TARGET_NOTE_OPTIONS.map(option => (
+                            <option key={option.midi} value={option.midi}>{option.label}</option>
+                        ))}
+                    </select>
+                    <button
+                        onClick={() => applyShiftToFiles([activeFile], targetShiftMidi, shiftReferenceMode)}
+                        style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #2563eb', borderRadius: 999, background: '#dbeafe', color: '#1e3a8a', cursor: 'pointer', fontWeight: 700 }}
+                        title={t('pitchShiftHint')}
+                    >
+                        {t('applyThisFile')}
+                    </button>
+                    <button
+                        onClick={() => applyShiftToFiles(files, targetShiftMidi, shiftReferenceMode)}
+                        style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #1d4ed8', borderRadius: 999, background: '#bfdbfe', color: '#1e3a8a', cursor: 'pointer', fontWeight: 700 }}
+                        title={t('pitchShiftHint')}
+                    >
+                        {t('applyAllOpen')}
+                    </button>
+                </div>
                 <div style={{ flex: 1 }} />
-                <button
-                    onClick={() => {
-                        if (!activeFile) return;
-                        const corrected = autoCorrectFrq(activeFile.frqData.frames);
-                        updateFrqData(activeFile.id, { ...activeFile.frqData, frames: corrected });
-                    }}
-                    style={{ fontSize: '13px', padding: '7px 14px', border: '1px solid #15803d', borderRadius: 999, background: 'linear-gradient(180deg, #4ade80 0%, #16a34a 100%)', cursor: 'pointer', color: '#fff', fontWeight: 800, boxShadow: '0 1px 0 rgba(255,255,255,0.25) inset, 0 3px 10px rgba(22,163,74,0.35)' }}
-                    title={t('autoCorrectHint')}
-                >{t('autoCorrect')}</button>
                 <button
                     onClick={() => {
                         if (!activeFile) return;
