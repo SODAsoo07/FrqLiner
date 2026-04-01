@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, type MouseEvent } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo, type MouseEvent } from 'react';
 import { useFrqContext } from './FrqContext';
 import { useLanguage } from './LanguageContext';
 import Meyda from 'meyda';
@@ -10,6 +10,7 @@ import {
     type LlsmVoicingMode,
 } from '../lib/frq';
 import { autoCorrectFrq } from '../lib/frqAutoCorrect';
+import { createApproxPreviewWav, type ApproxPreviewDebugInfo } from '../lib/approxPreview';
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -91,6 +92,43 @@ const formatPitch = (f0: number) => {
     };
 };
 
+const computeApproxPreviewRate = (
+    editedFrames: FrqFrame[],
+    originalFrames: FrqFrame[],
+) => {
+    const count = Math.min(editedFrames.length, originalFrames.length);
+    if (count === 0) return 1;
+
+    const ratios: number[] = [];
+    for (let i = 0; i < count; i++) {
+        const edited = editedFrames[i]?.f0 ?? 0;
+        const original = originalFrames[i]?.f0 ?? 0;
+        if (!Number.isFinite(edited) || !Number.isFinite(original)) continue;
+        if (edited <= 1 || original <= 1) continue;
+        const ratio = edited / original;
+        if (Number.isFinite(ratio) && ratio > 0.25 && ratio < 4) {
+            ratios.push(ratio);
+        }
+    }
+
+    if (ratios.length < 8) return 1;
+    ratios.sort((a, b) => a - b);
+    const median = ratios[Math.floor(ratios.length / 2)];
+    return Math.max(0.5, Math.min(2, median));
+};
+
+const hashFrames = (frames: FrqFrame[]) => {
+    let hash = 2166136261 >>> 0;
+    for (let i = 0; i < frames.length; i++) {
+        const f0 = frames[i]?.f0 ?? 0;
+        const quantized = f0 > 1 && Number.isFinite(f0)
+            ? Math.round(1200 * Math.log2(f0 / 440))
+            : -32768;
+        hash = Math.imul(hash ^ (quantized & 0xffff), 16777619) >>> 0;
+    }
+    return hash.toString(16);
+};
+
 // ──────────────────────────────────────────────
 // Component
 // ──────────────────────────────────────────────
@@ -98,6 +136,10 @@ const Editor = () => {
     const { files, activeFileId, updateFrqData, updateLlsmExperimental, updateLlsmVoicingMode, resetFrqData, undo, redo } = useFrqContext();
     const { t } = useLanguage();
     const activeFile = files.find(f => f.id === activeFileId);
+    const activeFileRef = useRef(activeFile);
+    useEffect(() => {
+        activeFileRef.current = activeFile;
+    }, [activeFile]);
 
     // ── Canvas refs ────────────────────────────
     const frqCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -123,6 +165,8 @@ const Editor = () => {
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const animFrameRef = useRef<number | null>(null);
+    const originalAudioUrlRef = useRef<string | null>(null);
+    const previewAudioRef = useRef<{ key: string; url: string } | null>(null);
     const [hoverPitch, setHoverPitch] = useState<number | null>(null);
     const [showSpectrogram, setShowSpectrogram] = useState(true);
     const [globalSpectrogramQuality, setGlobalSpectrogramQuality] = useState<SpectrogramQuality>('low');
@@ -139,9 +183,40 @@ const Editor = () => {
     const [waveformData, setWaveformData] = useState<Float32Array | null>(null);
     const [waveformSampleRate, setWaveformSampleRate] = useState<number | null>(null);
     const [spectrogramData, setSpectrogramData] = useState<Uint8Array[] | null>(null);
+    const [isPreparingPreviewAudio, setIsPreparingPreviewAudio] = useState(false);
+    const [previewDebug, setPreviewDebug] = useState<ApproxPreviewDebugInfo | null>(null);
     const activeSpectrogramQuality = activeFile
         ? (fileSpectrogramQualities[activeFile.id] ?? globalSpectrogramQuality)
         : globalSpectrogramQuality;
+    const approxPreviewRate = useMemo(() => {
+        if (!activeFile) return 1;
+        return computeApproxPreviewRate(activeFile.frqData.frames, activeFile.originalFrqData.frames);
+    }, [activeFile]);
+    const approxPreviewText = useMemo(() => {
+        const semitones = 12 * Math.log2(approxPreviewRate);
+        const sign = semitones >= 0 ? '+' : '';
+        return `${approxPreviewRate.toFixed(3)}x (${sign}${semitones.toFixed(2)} st)`;
+    }, [approxPreviewRate]);
+    const editedPitchHash = useMemo(
+        () => hashFrames(activeFile?.frqData.frames ?? []),
+        [activeFile?.frqData.frames],
+    );
+    const originalPitchHash = useMemo(
+        () => hashFrames(activeFile?.originalFrqData.frames ?? []),
+        [activeFile?.originalFrqData.frames],
+    );
+    const hasPitchPreviewDiff = editedPitchHash !== originalPitchHash;
+    const attachAudio = useCallback((url: string) => {
+        if (audioRef.current) {
+            audioRef.current.pause();
+        }
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audio.addEventListener('ended', () => {
+            setIsPlaying(false);
+            setCurrentTime(0);
+        });
+    }, []);
 
     // ── Reset on file change ───────────────────
     useEffect(() => {
@@ -153,6 +228,7 @@ const Editor = () => {
         setWaveformSampleRate(null);
         setSpectrogramData(null);
         setHoverPitch(null);
+        setPreviewDebug(null);
         dragStartFrqRef.current = null;
         dragDraftFrqRef.current = null;
         setEditorTab('pitch');
@@ -160,18 +236,21 @@ const Editor = () => {
 
         if (audioRef.current) {
             audioRef.current.pause();
-            URL.revokeObjectURL(audioRef.current.src);
             audioRef.current = null;
+        }
+        if (originalAudioUrlRef.current) {
+            URL.revokeObjectURL(originalAudioUrlRef.current);
+            originalAudioUrlRef.current = null;
+        }
+        if (previewAudioRef.current) {
+            URL.revokeObjectURL(previewAudioRef.current.url);
+            previewAudioRef.current = null;
         }
 
         if (activeFile?.wavFile) {
             const url = URL.createObjectURL(activeFile.wavFile);
-            const audio = new Audio(url);
-            audioRef.current = audio;
-            audio.addEventListener('ended', () => {
-                setIsPlaying(false);
-                setCurrentTime(0);
-            });
+            originalAudioUrlRef.current = url;
+            attachAudio(url);
 
             // Decode audio data for visualization
             activeFile.wavFile.arrayBuffer().then(async rawBuffer => {
@@ -190,7 +269,7 @@ const Editor = () => {
             }).catch(err => console.error('File read failed:', err));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeFileId]);
+    }, [activeFileId, attachAudio]);
 
     useEffect(() => {
         if (!activeFile || activeFile.sourceType !== 'llsm') {
@@ -290,6 +369,73 @@ const Editor = () => {
         return () => { cancelled = true; };
     }, [activeFile?.id, activeFile?.wavFile, activeSpectrogramQuality, waveformData, waveformSampleRate, showSpectrogram]);
 
+    const togglePlayback = useCallback(() => {
+        const liveFile = activeFileRef.current;
+        if (!audioRef.current || !liveFile?.wavFile) return;
+        if (audioCtxRef.current?.state === 'suspended') audioCtxRef.current.resume();
+
+        if (isPlaying) {
+            audioRef.current.pause();
+            setIsPlaying(false);
+            return;
+        }
+
+        const startPlayback = async () => {
+            let playUrl = originalAudioUrlRef.current;
+            const useApprox = liveFile.isModified || hasPitchPreviewDiff;
+
+            if (useApprox && waveformData && waveformSampleRate) {
+                setIsPreparingPreviewAudio(true);
+                try {
+                    const preview = createApproxPreviewWav(
+                        waveformData,
+                        waveformSampleRate,
+                        liveFile.frqData.frames,
+                        liveFile.originalFrqData.frames,
+                        liveFile.frqData.windowInterval,
+                        liveFile.expectedF0,
+                        liveFile.frqData.samplesPerWindow,
+                    );
+                    const previewUrl = URL.createObjectURL(preview.blob);
+                    if (previewAudioRef.current) {
+                        URL.revokeObjectURL(previewAudioRef.current.url);
+                    }
+                    previewAudioRef.current = { key: `${liveFile.id}:${Date.now()}`, url: previewUrl };
+                    setPreviewDebug(preview.debug);
+                } finally {
+                    setIsPreparingPreviewAudio(false);
+                }
+                playUrl = previewAudioRef.current?.url ?? playUrl;
+            } else {
+                setPreviewDebug(null);
+            }
+
+            if (!playUrl) return;
+            if (!audioRef.current || audioRef.current.src !== playUrl) {
+                attachAudio(playUrl);
+            }
+            if (!audioRef.current) return;
+            audioRef.current.currentTime = currentTime;
+            audioRef.current.playbackRate = 1;
+            await audioRef.current.play();
+            setIsPlaying(true);
+        };
+
+        startPlayback().catch(err => {
+            setIsPreparingPreviewAudio(false);
+            console.error('Playback start failed:', err);
+        });
+    }, [
+        activeFileId,
+        approxPreviewRate,
+        attachAudio,
+        currentTime,
+        hasPitchPreviewDiff,
+        isPlaying,
+        waveformData,
+        waveformSampleRate,
+    ]);
+
     // ── Keyboard shortcuts ─────────────────────
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -297,17 +443,7 @@ const Editor = () => {
 
             if (e.code === 'Space' && e.target === document.body) {
                 e.preventDefault();
-                if (audioCtxRef.current?.state === 'suspended') audioCtxRef.current.resume();
-                if (audioRef.current) {
-                    if (isPlaying) {
-                        audioRef.current.pause();
-                        setIsPlaying(false);
-                    } else {
-                        audioRef.current.currentTime = currentTime;
-                        audioRef.current.play();
-                        setIsPlaying(true);
-                    }
-                }
+                togglePlayback();
             }
 
             if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
@@ -320,7 +456,7 @@ const Editor = () => {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [activeFile, isPlaying, currentTime, undo, redo]);
+    }, [activeFile, togglePlayback, undo, redo]);
 
     // ── Playhead animation ─────────────────────
     useEffect(() => {
@@ -1112,6 +1248,48 @@ const Editor = () => {
             </div>
 
             {/* ─── Waveform overview panel ─────────────── */}
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px', borderBottom: '1px solid #ddd', background: '#f8fbff', flexWrap: 'wrap' }}>
+                <button
+                    onClick={togglePlayback}
+                    disabled={!activeFile.wavFile || isPreparingPreviewAudio}
+                    style={{
+                        fontSize: '12px',
+                        padding: '4px 12px',
+                        border: '1px solid #2563eb',
+                        borderRadius: 6,
+                        background: (activeFile.wavFile && !isPreparingPreviewAudio) ? '#eff6ff' : '#f1f5f9',
+                        color: (activeFile.wavFile && !isPreparingPreviewAudio) ? '#1d4ed8' : '#94a3b8',
+                        cursor: (activeFile.wavFile && !isPreparingPreviewAudio) ? 'pointer' : 'default',
+                        fontWeight: 700,
+                    }}
+                    title={t('previewApproxNotice')}
+                >
+                    {isPreparingPreviewAudio ? t('previewPreparing') : (isPlaying ? t('pause') : t('play'))}
+                </button>
+                <span style={{ fontSize: '11px', color: '#1d4ed8', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 4, padding: '2px 8px', minWidth: 148, textAlign: 'center' }}>
+                    {t('previewRate')}: {approxPreviewText}
+                </span>
+                <span style={{ fontSize: '11px', color: '#9a3412', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 4, padding: '2px 6px' }}>
+                    {t('previewApproxNotice')}
+                </span>
+                {previewDebug && (
+                    <span
+                        style={{
+                            fontSize: '11px',
+                            color: '#1f2937',
+                            background: '#f8fafc',
+                            border: '1px solid #cbd5e1',
+                            borderRadius: 4,
+                            padding: '2px 8px',
+                            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        }}
+                        title="Preview debug"
+                    >
+                        ratio {previewDebug.globalRatio.toFixed(3)} | st {previewDebug.semitoneDelta.toFixed(2)} | diff {previewDebug.diff.toFixed(4)} | seg {previewDebug.segmentCount} | voiced {previewDebug.voicedFrames}/{previewDebug.totalFrames} | spf {previewDebug.samplesPerFrame.toFixed(1)} | len {previewDebug.inputSamples}/{previewDebug.outputSamples} | fallback {previewDebug.fallbackUsed ? 'Y' : 'N'}
+                    </span>
+                )}
+            </div>
+
             <div
                 ref={waveContainerRef}
                 style={{ flexShrink: 0, height: '65px', position: 'relative', overflow: 'hidden', background: '#f0f4ff', borderTop: '1px solid #d0d9f0' }}
