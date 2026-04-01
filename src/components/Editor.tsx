@@ -1299,6 +1299,32 @@ const Editor = () => {
                         {t('experimentalUnavailable')}
                     </span>
                 )}
+                <div style={{ flex: 1 }} />
+                <button
+                    onClick={() => {
+                        if (!activeFile) return;
+                        if (!window.confirm(t('resetConfirm'))) return;
+                        resetFrqData(activeFile.id);
+                    }}
+                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #f2a20a', borderRadius: 3, background: '#fff8e1', cursor: 'pointer', color: '#7c5600' }}
+                    title={t('resetHint')}
+                >{t('reset')}</button>
+                <button
+                    onClick={() => undo(activeFile.id)}
+                    disabled={activeFile.history.length === 0}
+                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #ccc', borderRadius: 3, background: '#fff', cursor: activeFile.history.length ? 'pointer' : 'default', color: activeFile.history.length ? '#333' : '#bbb' }}
+                    title={t('undoHint')}
+                >{t('undo')}</button>
+                <button
+                    onClick={() => redo(activeFile.id)}
+                    disabled={activeFile.redoStack.length === 0}
+                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #ccc', borderRadius: 3, background: '#fff', cursor: activeFile.redoStack.length ? 'pointer' : 'default', color: activeFile.redoStack.length ? '#333' : '#bbb' }}
+                    title={t('redoHint')}
+                >{t('redo')}</button>
+                <span style={{ fontSize: '11px', color: '#888' }}>{t('shortcuts')}</span>
+            </div>
+
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px', borderBottom: '1px solid #ddd', background: '#f8fafc', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #bbf7d0', borderRadius: 8, background: '#f0fdf4' }}>
                     <span style={{ fontSize: 11, color: '#166534', fontWeight: 700 }}>{t('autoCorrect')}</span>
                     <button
@@ -1350,29 +1376,6 @@ const Editor = () => {
                         {t('applyAllOpen')}
                     </button>
                 </div>
-                <div style={{ flex: 1 }} />
-                <button
-                    onClick={() => {
-                        if (!activeFile) return;
-                        if (!window.confirm(t('resetConfirm'))) return;
-                        resetFrqData(activeFile.id);
-                    }}
-                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #f2a20a', borderRadius: 3, background: '#fff8e1', cursor: 'pointer', color: '#7c5600' }}
-                    title={t('resetHint')}
-                >{t('reset')}</button>
-                <button
-                    onClick={() => undo(activeFile.id)}
-                    disabled={activeFile.history.length === 0}
-                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #ccc', borderRadius: 3, background: '#fff', cursor: activeFile.history.length ? 'pointer' : 'default', color: activeFile.history.length ? '#333' : '#bbb' }}
-                    title={t('undoHint')}
-                >{t('undo')}</button>
-                <button
-                    onClick={() => redo(activeFile.id)}
-                    disabled={activeFile.redoStack.length === 0}
-                    style={{ fontSize: '12px', padding: '2px 8px', border: '1px solid #ccc', borderRadius: 3, background: '#fff', cursor: activeFile.redoStack.length ? 'pointer' : 'default', color: activeFile.redoStack.length ? '#333' : '#bbb' }}
-                    title={t('redoHint')}
-                >{t('redo')}</button>
-                <span style={{ fontSize: '11px', color: '#888' }}>{t('shortcuts')}</span>
             </div>
 
             {/* ─── Waveform overview panel ─────────────── */}
